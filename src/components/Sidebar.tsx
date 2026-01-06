@@ -1,13 +1,14 @@
+"use client";
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
 export default function Sidebar() {
   const pathname = usePathname(); // Highlights the active link
 
-  const isActive = (path: string) => pathname === path ? "bg-gray-800 text-white" : "text-gray-400 hover:bg-gray-800 hover:text-white";
+  const isActive = (path) => pathname === path ? "bg-gray-800 text-white" : "text-gray-400 hover:bg-gray-800 hover:text-white";
 
   return (
-    <aside className="w-64 bg-gray-900 h-screen fixed left-0 top-0 flex flex-col text-sm font-medium">
+    <aside className="w-64 bg-gray-900 h-screen fixed left-0 top-0 flex flex-col text-sm font-medium z-50">
       {/* Logo Area */}
       <div className="h-16 flex items-center px-6 border-b border-gray-800">
         <h1 className="text-white font-bold text-lg tracking-wider">NEXUS<span className="text-blue-500">ERP</span></h1>
@@ -51,15 +52,15 @@ export default function Sidebar() {
 
       {/* Footer / User */}
       <div className="p-4 border-t border-gray-800">
-        <button className="flex items-center w-full text-left">
+        <div className="flex items-center w-full text-left">
           <div className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center text-white font-bold">
             U
           </div>
           <div className="ml-3">
             <p className="text-sm font-medium text-white">User</p>
-            <p className="text-xs text-gray-500">View Profile</p>
+            <p className="text-xs text-gray-500">Connected</p>
           </div>
-        </button>
+        </div>
       </div>
     </aside>
   );
