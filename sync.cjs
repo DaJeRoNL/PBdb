@@ -1,170 +1,343 @@
 const fs = require('fs');
 const path = require('path');
 
-const filePath = path.join(process.cwd(), 'src/app/page.tsx');
+function writeFile(relativePath, content) {
+  const fullPath = path.join(process.cwd(), relativePath);
+  const dir = path.dirname(fullPath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(fullPath, content, 'utf8');
+  console.log(`✅ [CREATED] ${relativePath}`);
+}
 
-const securePageContent = `
+// 1. NEW LAYOUT (Fixes Sidebar & Adds Structure)
+const layoutContent = `
 "use client";
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import Sidebar from '@/components/Sidebar';
 
-import { supabase } from "../lib/supabaseClient";
-import { useState, useEffect } from "react";
-import Sidebar from "../components/Sidebar";
+export default function PlacebyteLayout({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  const isAccounts = pathname.includes('/accounts');
 
-export default function Home() {
-  const [session, setSession] = useState<any>(null);
-  const [isAuthorized, setIsAuthorized] = useState<boolean>(false);
-  const [loading, setLoading] = useState<boolean>(true);
-
-  useEffect(() => {
-    const checkAuth = async () => {
-      // 1. Get the authenticated user (Google Login)
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      if (session?.user) {
-        setSession(session);
-        
-        // 2. CHECK AUTHORIZATION: Does this user exist in 'profiles'?
-        const { data: profile, error } = await supabase
-          .from('profiles')
-          .select('id')
-          .eq('id', session.user.id)
-          .single();
-
-        // If profile exists, they are authorized
-        if (profile && !error) {
-          setIsAuthorized(true);
-        } else {
-          console.warn("User logged in but not found in profiles table.");
-          setIsAuthorized(false);
-        }
-      } else {
-        setSession(null);
-      }
-      setLoading(false);
-    };
-
-    checkAuth();
-
-    // Listen for auth state changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      // Re-run the check logic on change is simplest for safety
-      if (!session) {
-        setSession(null);
-        setIsAuthorized(false);
-      } else {
-        // Optimistic set, real check happens on next render or we could force reload
-        setSession(session);
-      }
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
-
-  const handleLogin = async () => {
-    await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: {
-        redirectTo: \`\${window.location.origin}/\`,
-      },
-    });
-  };
-
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    setSession(null);
-    setIsAuthorized(false);
-  };
-
-  if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-50">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-      </div>
-    );
-  }
-
-  // --- SCENARIO 1: NOT LOGGED IN ---
-  if (!session) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center p-24 bg-gray-100">
-        <div className="bg-white p-10 rounded-xl shadow-lg text-center max-w-md w-full">
-          <h1 className="text-3xl font-bold mb-2 text-gray-900">Nexus ERP</h1>
-          <p className="text-gray-500 mb-8">Sign in to access your dashboard</p>
-          <button
-            onClick={handleLogin}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-lg flex items-center justify-center gap-3 transition-all"
-          >
-            Sign In with Google
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // --- SCENARIO 2: LOGGED IN BUT NOT IN PROFILES (UNAUTHORIZED) ---
-  if (session && !isAuthorized) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center p-24 bg-gray-50">
-         <div className="bg-white p-8 rounded-lg shadow-md border border-red-200 text-center max-w-lg">
-            <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-red-100 mb-4">
-              <svg className="h-6 w-6 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-              </svg>
-            </div>
-            <h2 className="text-xl font-bold text-gray-900 mb-2">Access Denied</h2>
-            <p className="text-gray-600 mb-6">
-              You are signed in as <strong>{session.user.email}</strong>, but this account does not have a profile in the system.
-            </p>
-            <p className="text-sm text-gray-500 mb-6 bg-gray-100 p-3 rounded">
-               Contact your administrator to add your email to the <code>profiles</code> table.
-            </p>
-            <button
-              onClick={handleLogout}
-              className="text-red-600 hover:text-red-800 font-medium underline"
-            >
-              Sign Out & Try Different Account
-            </button>
-         </div>
-      </div>
-    );
-  }
-
-  // --- SCENARIO 3: LOGGED IN & AUTHORIZED ---
   return (
     <div className="flex min-h-screen bg-gray-50">
+      {/* 1. RESTORE SIDEBAR */}
       <Sidebar />
-      <main className="flex-1 ml-64 p-8">
-        <header className="flex justify-between items-center mb-8 pb-6 border-b border-gray-200">
+
+      {/* 2. MAIN CONTENT WRAPPER (Offset for Sidebar) */}
+      <div className="flex-1 ml-64 flex flex-col h-screen">
+        
+        {/* Sticky Sub-Navigation */}
+        <header className="bg-white border-b border-gray-200 px-8 py-4 flex justify-between items-center sticky top-0 z-40 shadow-sm">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
-            <p className="text-gray-500">Overview & Quick Access</p>
+            <h1 className="text-2xl font-bold text-gray-900">Placebyte CRM</h1>
+            <p className="text-sm text-gray-500">Business Development & Client Management</p>
           </div>
-          <button
-            onClick={handleLogout}
-            className="text-sm text-red-600 font-medium hover:text-red-800 border border-red-200 bg-red-50 px-4 py-2 rounded-md transition-colors"
-          >
-            Sign Out
-          </button>
+          
+          <div className="flex space-x-1 bg-gray-100 p-1 rounded-lg">
+            <Link 
+              href="/placebyte" 
+              className={\`px-4 py-2 text-sm font-medium rounded-md transition-all \${!isAccounts ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'}\`}
+            >
+              Lead Pipeline
+            </Link>
+            <Link 
+              href="/placebyte/accounts" 
+              className={\`px-4 py-2 text-sm font-medium rounded-md transition-all \${isAccounts ? 'bg-white shadow text-purple-600' : 'text-gray-500 hover:text-gray-700'}\`}
+            >
+              Won Accounts
+            </Link>
+          </div>
         </header>
         
-        <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-100">
-          <h2 className="text-xl font-semibold mb-2">Welcome, {session.user.email}</h2>
-          <p className="text-gray-600">
-            System status: <span className="text-green-600 font-medium">Authorized</span>
-          </p>
-        </div>
-      </main>
+        {/* Scrollable Page Content */}
+        <main className="flex-1 overflow-auto p-8">
+          {children}
+        </main>
+      </div>
     </div>
   );
 }
 `.trim();
 
-console.log("🔒 Securing Authentication Logic...");
+// 2. NEW LEADS PAGE (Smart CRM Style)
+const leadsPageContent = `
+"use client";
+import { supabase } from "@/lib/supabaseClient";
+import { useState, useEffect } from "react";
 
-try {
-    fs.writeFileSync(filePath, securePageContent, 'utf8');
-    console.log("✅ [UPDATED] src/app/page.tsx - Now checks 'profiles' table before granting access.");
-    console.log("👉 Please rebuild your project.");
-} catch (err) {
-    console.error("❌ [ERROR] Could not write file:", err.message);
+// Types for our Smart Lead
+type Lead = {
+  id: string;
+  created_at: string;
+  lead_name: string;
+  lead_role: string;
+  company_name: string;
+  industry: string;
+  status: string;
+  stage: string;
+  notes: string;
+  linkedin: string;
+  value: number;
+};
+
+export default function LeadsPage() {
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [filter, setFilter] = useState("");
+  const [showModal, setShowModal] = useState(false);
+  
+  // Empty state for new entry
+  const [formData, setFormData] = useState({
+    lead_name: '', lead_role: '', company_name: '', 
+    industry: '', status: 'Cold', stage: 'Outreach', 
+    value: 0, notes: '', linkedin: ''
+  });
+
+  useEffect(() => {
+    fetchLeads();
+  }, []);
+
+  const fetchLeads = async () => {
+    // Selects data mapped to our new structure
+    const { data, error } = await supabase
+      .from('opportunities')
+      .select('*')
+      .order('created_at', { ascending: false });
+      
+    if (!error && data) setLeads(data);
+  };
+
+  const handleCreate = async () => {
+    // Basic validation
+    if (!formData.company_name || !formData.lead_name) return alert("Company and Name are required");
+
+    const { error } = await supabase.from('opportunities').insert([formData]);
+    if (!error) {
+      setShowModal(false);
+      setFormData({
+        lead_name: '', lead_role: '', company_name: '', 
+        industry: '', status: 'Cold', stage: 'Outreach', 
+        value: 0, notes: '', linkedin: ''
+      });
+      fetchLeads();
+    } else {
+      alert("Error creating lead: " + error.message);
+    }
+  };
+
+  // Filter Logic
+  const filteredLeads = leads.filter(l => 
+    l.company_name?.toLowerCase().includes(filter.toLowerCase()) || 
+    l.lead_name?.toLowerCase().includes(filter.toLowerCase()) ||
+    l.industry?.toLowerCase().includes(filter.toLowerCase())
+  );
+
+  return (
+    <div className="max-w-full">
+      {/* Top Controls */}
+      <div className="flex justify-between items-center mb-6">
+        <div className="relative">
+          <input 
+            type="text" 
+            placeholder="Search leads, companies..." 
+            className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg w-80 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+          />
+          <svg className="w-5 h-5 text-gray-400 absolute left-3 top-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+        </div>
+
+        <button 
+          onClick={() => setShowModal(true)}
+          className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg font-medium shadow-sm flex items-center gap-2 transition-all"
+        >
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+          </svg>
+          Add Client Lead
+        </button>
+      </div>
+
+      {/* Smart Data Table */}
+      <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Date</th>
+              <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Lead Info</th>
+              <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Company / Industry</th>
+              <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Status / Stage</th>
+              <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Ref / Notes</th>
+              <th className="px-6 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="bg-white divide-y divide-gray-200">
+            {filteredLeads.map((lead) => (
+              <tr key={lead.id} className="hover:bg-blue-50 transition-colors group">
+                {/* Date */}
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                  {new Date(lead.created_at).toLocaleDateString()}
+                </td>
+
+                {/* Lead Name & Role */}
+                <td className="px-6 py-4 whitespace-nowrap">
+                  <div className="flex items-center">
+                    <div className="h-8 w-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-xs mr-3">
+                      {lead.lead_name ? lead.lead_name.substring(0,2).toUpperCase() : "??"}
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-gray-900">{lead.lead_name || "Unknown"}</div>
+                      <div className="text-xs text-gray-500">{lead.lead_role || "No Role"}</div>
+                    </div>
+                  </div>
+                </td>
+
+                {/* Company & Industry */}
+                <td className="px-6 py-4 whitespace-nowrap">
+                   <div className="text-sm text-gray-900 font-medium">{lead.company_name || "No Company"}</div>
+                   <div className="text-xs text-gray-500 flex items-center gap-1">
+                      {lead.industry && <span className="px-1.5 py-0.5 rounded bg-gray-100">{lead.industry}</span>}
+                      {lead.linkedin && (
+                        <a href={lead.linkedin} target="_blank" className="text-blue-500 hover:underline">
+                          LinkedIn ↗
+                        </a>
+                      )}
+                   </div>
+                </td>
+
+                {/* Status & Stage */}
+                <td className="px-6 py-4 whitespace-nowrap">
+                  <div className="flex flex-col gap-1">
+                    <span className={\`px-2 inline-flex text-xs leading-5 font-semibold rounded-full w-fit
+                      \${lead.status === 'Hot' ? 'bg-red-100 text-red-800' : 
+                        lead.status === 'Warm' ? 'bg-orange-100 text-orange-800' : 
+                        'bg-blue-100 text-blue-800'}\`}>
+                      {lead.status}
+                    </span>
+                    <span className="text-xs text-gray-500">Stage: {lead.stage}</span>
+                  </div>
+                </td>
+
+                {/* Notes */}
+                <td className="px-6 py-4">
+                  <p className="text-sm text-gray-500 truncate max-w-xs" title={lead.notes}>
+                    {lead.notes || "-"}
+                  </p>
+                </td>
+
+                {/* Actions */}
+                <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                  <button className="text-gray-400 hover:text-blue-600 transition-colors">
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                    </svg>
+                  </button>
+                </td>
+              </tr>
+            ))}
+            
+            {filteredLeads.length === 0 && (
+               <tr>
+                 <td colSpan={6} className="px-6 py-12 text-center text-gray-500">
+                    No leads found. Add one to get started!
+                 </td>
+               </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* MODAL: Add New Lead */}
+      {showModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl w-full max-w-lg shadow-2xl p-6 transform transition-all">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-xl font-bold text-gray-900">New Client Lead</h3>
+              <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-gray-600">✕</button>
+            </div>
+
+            <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-2">
+              <div className="grid grid-cols-2 gap-4">
+                 <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Contact Name</label>
+                    <input type="text" className="w-full p-2 border rounded-lg" placeholder="e.g. John Doe"
+                      value={formData.lead_name} onChange={e => setFormData({...formData, lead_name: e.target.value})} />
+                 </div>
+                 <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Role / Title</label>
+                    <input type="text" className="w-full p-2 border rounded-lg" placeholder="e.g. CTO"
+                      value={formData.lead_role} onChange={e => setFormData({...formData, lead_role: e.target.value})} />
+                 </div>
+              </div>
+
+              <div>
+                 <label className="block text-xs font-medium text-gray-700 mb-1">Company Name</label>
+                 <input type="text" className="w-full p-2 border rounded-lg" placeholder="e.g. Acme Inc"
+                   value={formData.company_name} onChange={e => setFormData({...formData, company_name: e.target.value})} />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                 <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Industry</label>
+                    <input type="text" className="w-full p-2 border rounded-lg" placeholder="e.g. Fintech"
+                      value={formData.industry} onChange={e => setFormData({...formData, industry: e.target.value})} />
+                 </div>
+                 <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Status</label>
+                    <select className="w-full p-2 border rounded-lg bg-white"
+                      value={formData.status} onChange={e => setFormData({...formData, status: e.target.value})}>
+                      <option>Cold</option>
+                      <option>Warm</option>
+                      <option>Hot</option>
+                      <option>Closed Won</option>
+                      <option>Lost</option>
+                    </select>
+                 </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                 <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Stage</label>
+                    <select className="w-full p-2 border rounded-lg bg-white"
+                      value={formData.stage} onChange={e => setFormData({...formData, stage: e.target.value})}>
+                      <option>Outreach</option>
+                      <option>Meeting Booked</option>
+                      <option>Proposal Sent</option>
+                      <option>Negotiation</option>
+                    </select>
+                 </div>
+                 <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">LinkedIn URL</label>
+                    <input type="text" className="w-full p-2 border rounded-lg" placeholder="https://..."
+                      value={formData.linkedin} onChange={e => setFormData({...formData, linkedin: e.target.value})} />
+                 </div>
+              </div>
+
+              <div>
+                 <label className="block text-xs font-medium text-gray-700 mb-1">Notes / Context</label>
+                 <textarea className="w-full p-2 border rounded-lg h-24 text-sm" placeholder="Any details..."
+                   value={formData.notes} onChange={e => setFormData({...formData, notes: e.target.value})}></textarea>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-gray-100">
+              <button onClick={() => setShowModal(false)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
+              <button onClick={handleCreate} className="px-6 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 shadow-md">
+                Save Client
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
+`.trim();
+
+console.log("🛠️ Applying Smart Placebyte Overhaul...");
+writeFile('src/app/placebyte/layout.tsx', layoutContent);
+writeFile('src/app/placebyte/page.tsx', leadsPageContent);
+console.log("✨ Done! Please run the SQL updates in Supabase to see the new columns.");
