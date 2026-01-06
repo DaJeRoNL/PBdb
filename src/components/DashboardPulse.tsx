@@ -1,4 +1,3 @@
-import { ProjectHealth } from "../types/database";
 
 export default function DashboardPulse() {
   // Mock data for now - we will connect this to Supabase later
