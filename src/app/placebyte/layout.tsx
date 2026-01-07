@@ -16,7 +16,7 @@ export default function PlacebyteLayout({ children }: { children: React.ReactNod
       <div className="flex-1 ml-64 flex flex-col h-screen">
         
         {/* Sticky Sub-Navigation */}
-        <header className="bg-white border-b border-gray-200 px-8 py-4 flex justify-between items-center sticky top-0 z-40 shadow-sm">
+        <header className="bg-white border-b border-gray-200 px-8 py-4 flex justify-between items-center sticky top-0 z-40 shadow-sm flex-shrink-0">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Placebyte CRM</h1>
             <p className="text-sm text-gray-500">Business Development & Client Management</p>
@@ -39,7 +39,8 @@ export default function PlacebyteLayout({ children }: { children: React.ReactNod
         </header>
         
         {/* Scrollable Page Content */}
-        <main className="flex-1 overflow-auto p-8">
+        {/* Removed p-8 to eliminate grey border, kept overflow for scrolling */}
+        <main className="flex-1 overflow-auto">
           {children}
         </main>
       </div>
