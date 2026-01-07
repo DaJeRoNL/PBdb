@@ -3,13 +3,15 @@ import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { 
   Eye, Settings, Plus, ExternalLink, Calendar, X, Save, 
-  AlertTriangle, Ban, CheckCircle, PauseCircle, Trash2, Search, Filter 
+  AlertTriangle, Ban, CheckCircle, PauseCircle, Trash2, Search, 
+  User, Palette, Lock, Mail
 } from "lucide-react";
 import Link from "next/link";
 
 export default function PortalsManagement() {
   const [portals, setPortals] = useState<any[]>([]);
   const [wonAccounts, setWonAccounts] = useState<any[]>([]);
+  const [internalStaff, setInternalStaff] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [portalStats, setPortalStats] = useState<Record<string, any>>({});
@@ -20,6 +22,7 @@ export default function PortalsManagement() {
   
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [editingPortal, setEditingPortal] = useState<any>(null);
+  const [activeTab, setActiveTab] = useState<'access' | 'branding' | 'team'>('access');
   
   // Delete Modal
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -30,7 +33,17 @@ export default function PortalsManagement() {
   useEffect(() => {
     fetchPortals();
     fetchWonAccounts();
+    fetchInternalStaff();
   }, []);
+
+  const fetchInternalStaff = async () => {
+    // Fetch users with 'internal' role for the dropdown
+    const { data } = await supabase
+      .from('profiles')
+      .select('id, email, full_name') // Assuming you might have full_name in metadata or column
+      .eq('role', 'internal');
+    setInternalStaff(data || []);
+  };
 
   const fetchPortals = async () => {
     const { data, error } = await supabase
@@ -39,7 +52,6 @@ export default function PortalsManagement() {
       .order('created_at', { ascending: false });
     
     if (!error && data) {
-      // Sort: Expiring soonest first
       const sorted = data.sort((a, b) => {
         const dateA = new Date(a.client_portal_settings?.access_end_date || 0).getTime();
         const dateB = new Date(b.client_portal_settings?.access_end_date || 0).getTime();
@@ -89,16 +101,8 @@ export default function PortalsManagement() {
     if (!portalToDelete || deleteConfirmation !== portalToDelete.name) return;
     setIsLoading(true);
     try {
-      // 1. Unlink Opportunity
       await supabase.from('opportunities').update({ client_id: null }).eq('client_id', portalToDelete.id);
-      
-      // 2. Cascade deletes handled by DB, but explicit cleanup for safety
-      await supabase.from('candidates').delete().eq('client_id', portalToDelete.id);
-      await supabase.from('client_portal_settings').delete().eq('client_id', portalToDelete.id);
-      
-      // 3. Delete Client
-      const { error } = await supabase.from('clients').delete().eq('id', portalToDelete.id);
-      if (error) throw error;
+      await supabase.from('clients').delete().eq('id', portalToDelete.id); // Cascade deletes settings/candidates/notes
 
       setShowDeleteModal(false);
       setPortalToDelete(null);
@@ -118,8 +122,13 @@ export default function PortalsManagement() {
     await supabase.from('client_portal_settings').update({
       is_active: editingPortal.client_portal_settings.is_active,
       access_start_date: editingPortal.client_portal_settings.access_start_date,
-      access_end_date: editingPortal.client_portal_settings.access_end_date
+      access_end_date: editingPortal.client_portal_settings.access_end_date,
+      primary_color: editingPortal.client_portal_settings.primary_color,
+      welcome_message: editingPortal.client_portal_settings.welcome_message,
+      account_manager_name: editingPortal.client_portal_settings.account_manager_name,
+      account_manager_email: editingPortal.client_portal_settings.account_manager_email
     }).eq('client_id', editingPortal.id);
+    
     setIsLoading(false);
     setShowConfigModal(false);
     fetchPortals();
@@ -141,8 +150,14 @@ export default function PortalsManagement() {
       nextYear.setFullYear(nextYear.getFullYear() + 1);
       
       await supabase.from('client_portal_settings').insert([{
-        client_id: client.id, is_active: true, access_start_date: new Date().toISOString(), access_end_date: nextYear.toISOString(),
-        primary_color: '#2563eb', welcome_message: `Welcome to the ${opp.company_name} dashboard.`
+        client_id: client.id, 
+        is_active: true, 
+        access_start_date: new Date().toISOString(), 
+        access_end_date: nextYear.toISOString(),
+        primary_color: '#2563eb', 
+        welcome_message: `Welcome to the ${opp.company_name} dashboard.`,
+        account_manager_name: 'PlaceByte Team',
+        account_manager_email: 'team@placebyte.com'
       }]);
 
       setShowCreateModal(false);
@@ -157,8 +172,13 @@ export default function PortalsManagement() {
 
   const filteredPortals = portals.filter(p => p.name.toLowerCase().includes(searchQuery.toLowerCase()));
 
+  // Close modals on backdrop click
+  const handleBackdropClick = (e: React.MouseEvent, closer: () => void) => {
+    if (e.target === e.currentTarget) closer();
+  };
+
   return (
-    <div className="max-w-7xl mx-auto px-4">
+    <div className="max-w-7xl mx-auto px-4 pb-20">
       <div className="flex flex-col md:flex-row md:justify-between md:items-center mb-8 gap-4">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Portal Management</h2>
@@ -203,7 +223,7 @@ export default function PortalsManagement() {
               </div>
 
               <div className="flex gap-2">
-                <button onClick={() => { setEditingPortal(JSON.parse(JSON.stringify(client))); setShowConfigModal(true); }} className="p-2 border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600 transition-colors"><Settings size={18} /></button>
+                <button onClick={() => { setEditingPortal(JSON.parse(JSON.stringify(client))); setActiveTab('access'); setShowConfigModal(true); }} className="p-2 border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600 transition-colors"><Settings size={18} /></button>
                 <Link href={`/portal?impersonate=${client.id}`} target="_blank" className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg hover:bg-blue-100 font-medium transition-colors text-sm">
                   <Eye size={16} /> View
                 </Link>
@@ -213,35 +233,114 @@ export default function PortalsManagement() {
         })}
       </div>
 
-      {/* --- CONFIG MODAL --- */}
+      {/* --- ADVANCED CONFIG MODAL --- */}
       {showConfigModal && editingPortal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 backdrop-blur-sm p-4">
-          <div className="bg-white p-6 rounded-xl w-full max-w-lg shadow-2xl text-gray-900">
-            <div className="flex justify-between items-center mb-6 border-b pb-4">
-              <h3 className="text-lg font-bold">Settings: {editingPortal.name}</h3>
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 backdrop-blur-sm p-4" onClick={(e) => handleBackdropClick(e, () => setShowConfigModal(false))}>
+          <div className="bg-white rounded-xl w-full max-w-2xl shadow-2xl text-gray-900 overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="flex justify-between items-center p-6 border-b">
+              <h3 className="text-xl font-bold flex items-center gap-2"><Settings size={20}/> Configure: {editingPortal.name}</h3>
               <div className="flex gap-2">
                 <button onClick={() => { setPortalToDelete(editingPortal); setShowConfigModal(false); setShowDeleteModal(true); }} className="text-red-600 hover:bg-red-50 p-2 rounded transition"><Trash2 size={18} /></button>
                 <button onClick={() => setShowConfigModal(false)} className="text-gray-400 hover:text-gray-600 p-2"><X size={20}/></button>
               </div>
             </div>
 
-            <div className="mb-6 bg-gray-50 p-4 rounded-lg border border-gray-200 flex justify-between items-center">
-               <div>
-                 <span className="font-bold text-sm block">Access Status</span>
-                 <span className="text-xs text-gray-500">{checkStatus(editingPortal.client_portal_settings).locked ? "Locked: Date range invalid." : "Toggle to pause/resume access."}</span>
-               </div>
-               <button onClick={() => { if (!checkStatus(editingPortal.client_portal_settings).locked) setEditingPortal({ ...editingPortal, client_portal_settings: { ...editingPortal.client_portal_settings, is_active: !editingPortal.client_portal_settings.is_active } }); }} className={`w-10 h-5 rounded-full p-0.5 transition-colors ${editingPortal.client_portal_settings.is_active ? 'bg-green-500' : 'bg-gray-300'} ${checkStatus(editingPortal.client_portal_settings).locked ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                 <div className={`w-4 h-4 bg-white rounded-full shadow transition-transform ${editingPortal.client_portal_settings.is_active ? 'translate-x-5' : ''}`} />
-               </button>
+            <div className="flex border-b border-gray-200 bg-gray-50/50">
+               <button onClick={() => setActiveTab('access')} className={`flex-1 py-3 text-sm font-medium border-b-2 transition-colors ${activeTab === 'access' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>Access Control</button>
+               <button onClick={() => setActiveTab('branding')} className={`flex-1 py-3 text-sm font-medium border-b-2 transition-colors ${activeTab === 'branding' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>Branding & Copy</button>
+               <button onClick={() => setActiveTab('team')} className={`flex-1 py-3 text-sm font-medium border-b-2 transition-colors ${activeTab === 'team' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>Account Manager</button>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-               <div><label className="text-xs font-bold text-gray-500 uppercase">Start Date</label><input type="date" className="w-full mt-1 p-2 border rounded bg-white text-sm text-gray-900" value={editingPortal.client_portal_settings.access_start_date?.split('T')[0]} onChange={(e) => setEditingPortal({ ...editingPortal, client_portal_settings: { ...editingPortal.client_portal_settings, access_start_date: e.target.value } })} /></div>
-               <div><label className="text-xs font-bold text-gray-500 uppercase">End Date</label><input type="date" className="w-full mt-1 p-2 border rounded bg-white text-sm text-gray-900" value={editingPortal.client_portal_settings.access_end_date?.split('T')[0]} onChange={(e) => setEditingPortal({ ...editingPortal, client_portal_settings: { ...editingPortal.client_portal_settings, access_end_date: e.target.value } })} /></div>
+            <div className="p-6 overflow-y-auto">
+               
+               {/* TAB: ACCESS */}
+               {activeTab === 'access' && (
+                 <div className="space-y-6">
+                    <div className="bg-gray-50 p-4 rounded-lg border border-gray-200 flex justify-between items-center">
+                       <div>
+                         <span className="font-bold text-sm block">Portal Status</span>
+                         <span className="text-xs text-gray-500">{checkStatus(editingPortal.client_portal_settings).locked ? "Locked due to invalid dates." : "Toggle to pause/resume access."}</span>
+                       </div>
+                       <button onClick={() => { if (!checkStatus(editingPortal.client_portal_settings).locked) setEditingPortal({ ...editingPortal, client_portal_settings: { ...editingPortal.client_portal_settings, is_active: !editingPortal.client_portal_settings.is_active } }); }} className={`w-10 h-5 rounded-full p-0.5 transition-colors ${editingPortal.client_portal_settings.is_active ? 'bg-green-500' : 'bg-gray-300'} ${checkStatus(editingPortal.client_portal_settings).locked ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                         <div className={`w-4 h-4 bg-white rounded-full shadow transition-transform ${editingPortal.client_portal_settings.is_active ? 'translate-x-5' : ''}`} />
+                       </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                       <div><label className="text-xs font-bold text-gray-500 uppercase">Start Date</label><input type="date" className="w-full mt-1 p-2 border rounded bg-white text-sm" value={editingPortal.client_portal_settings.access_start_date?.split('T')[0]} onChange={(e) => setEditingPortal({ ...editingPortal, client_portal_settings: { ...editingPortal.client_portal_settings, access_start_date: e.target.value } })} /></div>
+                       <div><label className="text-xs font-bold text-gray-500 uppercase">End Date</label><input type="date" className="w-full mt-1 p-2 border rounded bg-white text-sm" value={editingPortal.client_portal_settings.access_end_date?.split('T')[0]} onChange={(e) => setEditingPortal({ ...editingPortal, client_portal_settings: { ...editingPortal.client_portal_settings, access_end_date: e.target.value } })} /></div>
+                    </div>
+                 </div>
+               )}
+
+               {/* TAB: BRANDING */}
+               {activeTab === 'branding' && (
+                 <div className="space-y-6">
+                    <div>
+                      <label className="text-xs font-bold text-gray-500 uppercase">Welcome Message</label>
+                      <input type="text" className="w-full mt-1 p-2 border rounded bg-white text-sm" value={editingPortal.client_portal_settings.welcome_message} onChange={(e) => setEditingPortal({ ...editingPortal, client_portal_settings: { ...editingPortal.client_portal_settings, welcome_message: e.target.value } })} />
+                    </div>
+                    <div>
+                      <label className="text-xs font-bold text-gray-500 uppercase">Primary Color</label>
+                      <div className="flex items-center gap-3 mt-2">
+                        <input type="color" className="w-10 h-10 border rounded cursor-pointer" value={editingPortal.client_portal_settings.primary_color} onChange={(e) => setEditingPortal({ ...editingPortal, client_portal_settings: { ...editingPortal.client_portal_settings, primary_color: e.target.value } })} />
+                        <span className="text-sm font-mono text-gray-600 uppercase">{editingPortal.client_portal_settings.primary_color}</span>
+                      </div>
+                    </div>
+                 </div>
+               )}
+
+               {/* TAB: TEAM */}
+               {activeTab === 'team' && (
+                 <div className="space-y-6">
+                    <div>
+                      <label className="text-xs font-bold text-gray-500 uppercase block mb-2">Select From Team</label>
+                      <select 
+                        className="w-full p-2 border rounded bg-white text-sm text-gray-900"
+                        onChange={(e) => {
+                          const staff = internalStaff.find(s => s.id === e.target.value);
+                          if (staff) {
+                            setEditingPortal({
+                              ...editingPortal,
+                              client_portal_settings: {
+                                ...editingPortal.client_portal_settings,
+                                account_manager_name: staff.full_name || staff.email.split('@')[0], // Fallback if no full name
+                                account_manager_email: staff.email
+                              }
+                            });
+                          }
+                        }}
+                      >
+                        <option value="">-- Auto-fill from Staff List --</option>
+                        {internalStaff.map(s => <option key={s.id} value={s.id}>{s.email}</option>)}
+                      </select>
+                    </div>
+                    <div className="border-t border-gray-100 my-4"></div>
+                    <div className="grid grid-cols-2 gap-4">
+                       <div>
+                         <label className="text-xs font-bold text-gray-500 uppercase">Display Name</label>
+                         <div className="relative mt-1">
+                           <User size={14} className="absolute left-3 top-3 text-gray-400"/>
+                           <input type="text" className="w-full pl-9 p-2 border rounded bg-white text-sm" value={editingPortal.client_portal_settings.account_manager_name} onChange={(e) => setEditingPortal({ ...editingPortal, client_portal_settings: { ...editingPortal.client_portal_settings, account_manager_name: e.target.value } })} />
+                         </div>
+                       </div>
+                       <div>
+                         <label className="text-xs font-bold text-gray-500 uppercase">Contact Email</label>
+                         <div className="relative mt-1">
+                           <Mail size={14} className="absolute left-3 top-3 text-gray-400"/>
+                           <input type="email" className="w-full pl-9 p-2 border rounded bg-white text-sm" value={editingPortal.client_portal_settings.account_manager_email} onChange={(e) => setEditingPortal({ ...editingPortal, client_portal_settings: { ...editingPortal.client_portal_settings, account_manager_email: e.target.value } })} />
+                         </div>
+                       </div>
+                    </div>
+                 </div>
+               )}
+
             </div>
 
-            <div className="mt-8 flex justify-end gap-2">
-               <button className="bg-black text-white px-4 py-2 rounded text-sm font-medium" onClick={handleUpdatePortal}>{isLoading ? "Saving..." : "Save Changes"}</button>
+            <div className="p-6 border-t bg-gray-50 flex justify-end gap-3">
+              <button onClick={() => setShowConfigModal(false)} className="px-4 py-2 text-gray-600 hover:bg-gray-200 rounded-lg text-sm font-medium">Cancel</button>
+              <button onClick={handleUpdatePortal} disabled={isLoading} className="px-6 py-2 bg-black hover:bg-gray-800 text-white rounded-lg font-medium shadow-md flex items-center gap-2">
+                <Save size={16} /> {isLoading ? "Saving..." : "Save Changes"}
+              </button>
             </div>
           </div>
         </div>
@@ -249,7 +348,7 @@ export default function PortalsManagement() {
 
       {/* --- DELETE MODAL --- */}
       {showDeleteModal && portalToDelete && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60] backdrop-blur-sm p-4">
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60] backdrop-blur-sm p-4" onClick={(e) => handleBackdropClick(e, () => setShowDeleteModal(false))}>
           <div className="bg-white p-8 rounded-xl w-full max-w-md shadow-2xl text-gray-900 border-t-4 border-red-600">
             <h3 className="text-xl font-bold text-red-600 mb-2 flex items-center gap-2"><AlertTriangle /> Delete Portal?</h3>
             <p className="text-sm text-gray-600 mb-6">Irreversible. Deletes <strong>{portalToDelete.name}</strong> and all data.</p>
@@ -265,9 +364,9 @@ export default function PortalsManagement() {
         </div>
       )}
 
-      {/* CREATE MODAL (Reused logic) */}
+      {/* CREATE MODAL */}
       {showCreateModal && (
-         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={(e) => handleBackdropClick(e, () => setShowCreateModal(false))}>
             <div className="bg-white p-8 rounded-xl w-full max-w-md text-gray-900">
                 <h3 className="font-bold text-lg mb-4 text-black">New Portal</h3>
                 <select className="w-full p-2 border rounded mb-4 text-black bg-white" value={selectedAccountId} onChange={e => setSelectedAccountId(e.target.value)}>

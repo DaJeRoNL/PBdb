@@ -1,434 +1,824 @@
 "use client";
-import React, { useEffect, useState, useRef, useMemo } from 'react';
+import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { 
-  Phone, TrendingUp, AlertCircle, CheckCircle, Clock, Shield, Users, 
-  Search, ChevronRight, Mail, Activity, ArrowUpRight, Filter, Layers, 
-  MoreHorizontal, Calendar, FileText, Plus, Trash2, Edit, PieChart, DollarSign
-} from 'lucide-react';
+  Building2, TrendingUp, Users, AlertCircle, CheckCircle, 
+  MoreHorizontal, ArrowRight, ExternalLink, Mail, Phone, 
+  Calendar, Shield, Search, Filter, Plus, LayoutDashboard,
+  Clock, X, Activity, DollarSign, FileText, Lock, Unlock,
+  MessageSquare, Save, Briefcase, CreditCard, Receipt, Hash,
+  Info, UserPlus, Trash2, Calculator, Percent, Wallet
+} from "lucide-react";
+import Link from "next/link";
 
 // --- TYPES ---
-type Account = {
-  id: string; 
-  created_at: string;
-  updated_at?: string;
-  won_at: string; 
-  last_contacted_at?: string;
-  company_name: string;
-  lead_name: string;
-  lead_role: string;
-  value: number;
-  industry: string;
-  notes: string;
-  email?: string;
-  phone?: string;
-  status: string; // Should be 'Closed Won' usually
-  campaigns?: { name: string }; 
-};
+type Tab = 'overview' | 'commercials' | 'team' | 'notes';
 
-type Log = {
+type Product = {
   id: number;
-  created_at: string;
-  action: string;
-  user_email?: string;
+  name: string;
+  type: 'fixed' | 'commission' | 'hybrid';
+  base_price: number; 
+  commission_percent: number;
+  deposit_amount: number;
+  deposit_date: string;
+  deposit_paid: boolean;
 };
 
-type Toast = {
-  id: number;
-  message: string;
-  type: 'success' | 'error' | 'info';
-};
+// REQUIRED FIELDS FOR HEALTHY SETUP
+const REQUIRED_COMMERCIALS = ['billing_contact_email', 'tax_id', 'payment_terms'];
+const REQUIRED_OPS = ['project_deadline', 'owner_id'];
+const REQUIRED_FIELDS = [...REQUIRED_COMMERCIALS, ...REQUIRED_OPS];
 
-export default function WonAccountDashboard() {
-  const [accounts, setAccounts] = useState<Account[]>([]);
-  const [logs, setLogs] = useState<Log[]>([]);
-  const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
+export default function AccountsDashboard() {
   const [loading, setLoading] = useState(true);
-  const [toasts, setToasts] = useState<Toast[]>([]);
-  
-  // UI State
-  const [search, setSearch] = useState("");
-  const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
-  const [isContentVisible, setIsContentVisible] = useState(false);
-  // Fixed Type Definition for activeTab
-  const [activeTab, setActiveTab] = useState<'overview' | 'history' | 'stakeholders' | 'documents'>('overview');
-  const [sortBy, setSortBy] = useState<'recent' | 'value' | 'name'>('recent');
-  
-  // Modals & Context Menu
-  const [showEditModal, setShowEditModal] = useState(false);
-  const [editForm, setEditForm] = useState<Partial<Account>>({});
-  const [contextMenu, setContextMenu] = useState<{ visible: boolean, x: number, y: number, accountId: string } | null>(null);
+  const [accounts, setAccounts] = useState<any[]>([]);
+  const [filteredAccounts, setFilteredAccounts] = useState<any[]>([]);
+  const [onboardingQueue, setOnboardingQueue] = useState<any[]>([]);
+  const [internalStaff, setInternalStaff] = useState<any[]>([]);
+  const [currentUser, setCurrentUser] = useState<any>(null);
 
-  // Timers
-  const hoverTimeout = useRef<NodeJS.Timeout | null>(null);
+  // Selection & UI State
+  const [selectedAccount, setSelectedAccount] = useState<any>(null);
+  const [activeTab, setActiveTab] = useState<Tab>('overview');
+  const [filterMode, setFilterMode] = useState<'all' | 'mine' | 'risk'>('all');
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [showHealthInfo, setShowHealthInfo] = useState(false);
+  
+  // Edit State
+  const [editForm, setEditForm] = useState<any>({});
+  const [products, setProducts] = useState<Product[]>([]);
+  const [newProduct, setNewProduct] = useState<Product>({ 
+    id: 0, 
+    name: '', 
+    type: 'fixed', 
+    base_price: 0, 
+    commission_percent: 0,
+    deposit_amount: 0,
+    deposit_date: '',
+    deposit_paid: false
+  });
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [missingFields, setMissingFields] = useState<string[]>([]);
 
-  // --- FETCHING ---
+  // Notes
+  const [newNote, setNewNote] = useState("");
+  const [notes, setNotes] = useState<any[]>([]);
+  
+  // Calculated
+  const [healthDetails, setHealthDetails] = useState<any>(null);
+
   useEffect(() => {
-    fetchWonAccounts();
-    
-    // Global click listener to close context menu
-    const handleClick = () => setContextMenu(null);
-    window.addEventListener('click', handleClick);
-    return () => window.removeEventListener('click', handleClick);
+    init();
   }, []);
 
   useEffect(() => {
+    applyFilters();
+  }, [accounts, filterMode, searchQuery]);
+
+  // Dirty State Tracker & Live Calc
+  useEffect(() => {
     if (selectedAccount) {
-      fetchLogs(selectedAccount.id);
-    }
-  }, [selectedAccount]);
+      setHasUnsavedChanges(true);
+      
+      const allRequired = [...REQUIRED_COMMERCIALS, ...REQUIRED_OPS];
+      const missing = allRequired.filter(f => !editForm[f]);
+      setMissingFields(missing);
 
-  const fetchWonAccounts = async () => {
-    const { data, error } = await supabase
-      .from('opportunities')
-      .select('*, campaigns(name)')
-      .eq('status', 'Closed Won')
-      .order('won_at', { ascending: false });
-
-    if (!error && data) {
-      setAccounts(data);
+      // Live Recalc Total Value based on Products
+      const totalVal = products.reduce((acc, p) => acc + (Number(p.base_price) || 0), 0);
+      
+      // Update local edit form with new total
+      const updatedForm = { ...editForm, contract_value: totalVal };
+      if (editForm.contract_value !== totalVal) {
+          setEditForm(updatedForm);
+      }
+      
+      // Update health details live
+      const updatedAccount = { ...selectedAccount, ...updatedForm, commercial_products: products };
+      setHealthDetails(calculateHealthScore(updatedAccount));
     }
+  }, [products, editForm.budget_rule_percentage, editForm.hourly_rate_estimate, editForm]);
+
+  // Prevent background scroll
+  useEffect(() => {
+    document.body.style.overflow = isSidebarOpen ? 'hidden' : 'unset';
+    return () => { document.body.style.overflow = 'unset'; };
+  }, [isSidebarOpen]);
+
+  const init = async () => {
+    setLoading(true);
+    const { data: { session } } = await supabase.auth.getSession();
+    setCurrentUser(session?.user);
+
+    await Promise.all([fetchAccounts(), fetchOnboarding(), fetchStaff()]);
     setLoading(false);
   };
 
-  const fetchLogs = async (accountId: string) => {
+  const fetchAccounts = async () => {
     const { data } = await supabase
-      .from('lead_logs')
-      .select('*')
-      .eq('lead_id', accountId)
+      .from('clients')
+      .select(`*, client_portal_settings (*), owner:profiles!owner_id(email)`)
       .order('created_at', { ascending: false });
-    if (data) setLogs(data);
+    
+    const enriched = (data || []).map(c => {
+      const h = calculateHealthScore(c);
+      // Count missing fields for the badge
+      const allReq = ['billing_contact_email', 'tax_id', 'owner_id'];
+      const missingCount = allReq.filter(f => !c[f]).length;
+      return { ...c, healthScore: h.score, healthReason: h.reason, missingCount };
+    });
+    
+    setAccounts(enriched);
+  };
+
+  const fetchOnboarding = async () => {
+    const { data } = await supabase.from('opportunities').select('*').eq('status', 'Closed Won').is('client_id', null);
+    setOnboardingQueue(data || []);
+  };
+
+  const fetchStaff = async () => {
+    const { data } = await supabase.from('profiles').select('id, email, role').eq('role', 'internal');
+    setInternalStaff(data || []);
+  };
+
+  const fetchNotes = async (clientId: string) => {
+    const { data } = await supabase
+      .from('account_internal_notes')
+      .select('*, profiles(email)')
+      .eq('client_id', clientId)
+      .order('created_at', { ascending: false });
+    setNotes(data || []);
+  };
+
+  // --- LOGIC: HEALTH SCORE ---
+  const calculateHealthScore = (client: any) => {
+    let score = 100;
+    const reasons: string[] = [];
+    const HOURLY_COST_BASIS = client.hourly_rate_estimate || 10; 
+    
+    let totalValue = client.contract_value || 0;
+    if (Array.isArray(client.commercial_products) && client.commercial_products.length > 0) {
+       totalValue = client.commercial_products.reduce((sum: number, p: any) => sum + (Number(p.base_price) || 0), 0);
+    }
+
+    // 1. Sourcing Efficiency
+    const budgetPercent = (client.budget_rule_percentage || 15) / 100;
+    const sourcingBudget = totalValue * budgetPercent;
+    const hoursBudget = sourcingBudget / HOURLY_COST_BASIS;
+
+    if (totalValue === 0) { score -= 20; reasons.push("Zero Contract Value (-20)"); }
+    else if (hoursBudget < 10) { score -= 10; reasons.push("Low Budget <10h (-10)"); }
+    else { score += 5; reasons.push(`Healthy Budget (${Math.floor(hoursBudget)}h) (+5)`); }
+
+    // 2. Deadline
+    if (client.project_deadline) {
+      const daysLeft = Math.floor((new Date(client.project_deadline).getTime() - new Date().getTime()) / (1000 * 3600 * 24));
+      if (daysLeft < 0) { score -= 40; reasons.push("Overdue (-40)"); }
+      else if (daysLeft < 14) { score -= 10; reasons.push("Deadline < 2w (-10)"); }
+    } else {
+      score -= 5; reasons.push("No Deadline Set (-5)");
+    }
+
+    return { score: Math.min(100, Math.max(0, score)), reason: reasons, hoursBudget: Math.floor(hoursBudget) };
+  };
+
+  // --- LOGIC: FILTER ---
+  const applyFilters = () => {
+    let result = accounts;
+    if (filterMode === 'mine' && currentUser) {
+      result = result.filter(a => a.owner_id === currentUser.id || a.collaborators?.includes(currentUser.id));
+    }
+    if (filterMode === 'risk') {
+      result = result.filter(a => a.healthScore < 70);
+    }
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(a => a.name.toLowerCase().includes(q) || a.domain?.toLowerCase().includes(q));
+    }
+    setFilteredAccounts(result);
   };
 
   // --- ACTIONS ---
-  const addToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
-    const id = Date.now();
-    setToasts(prev => [...prev, { id, message, type }]);
-    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
-  };
-
-  const logAction = async (id: string, action: string) => {
-    const { data: { user } } = await supabase.auth.getUser();
-    await supabase.from('lead_logs').insert([{ 
-      lead_id: id, action, user_email: user?.email || "System" 
-    }]);
-    if (selectedAccount?.id === id) fetchLogs(id);
-  };
-
-  const handleEditSubmit = async () => {
-    if (!selectedAccount || !editForm.company_name) return;
+  const handleSelectAccount = (account: any) => {
+    setSelectedAccount(account);
+    const health = calculateHealthScore(account);
+    setHealthDetails(health);
+    setHasUnsavedChanges(false);
     
-    const { error } = await supabase
-      .from('opportunities')
-      .update({ ...editForm, last_contacted_at: new Date().toISOString() })
-      .eq('id', selectedAccount.id);
+    setEditForm({
+      ...account,
+      owner_id: account.owner_id || currentUser?.id, 
+      pricing_plan: account.pricing_plan || 'Recruitment - Fixed',
+      contract_value: account.contract_value || 0,
+      hourly_rate_estimate: account.hourly_rate_estimate || 10,
+      budget_rule_percentage: account.budget_rule_percentage || 15,
+      tax_percentage: account.tax_percentage || 12, // Default to 12% (PH)
+      visibility: account.visibility || 'public',
+      collaborators: account.collaborators || [], 
+      
+      // Defaults
+      contract_start_date: account.contract_start_date || '',
+      contract_end_date: account.contract_end_date || '',
+      project_deadline: account.project_deadline || '',
+      billing_contact_name: account.billing_contact_name || '',
+      billing_contact_email: account.billing_contact_email || '',
+      billing_address: account.billing_address || '',
+      tax_id: account.tax_id || '',
+      payment_terms: account.payment_terms || 'Net 30'
+    });
+    
+    setProducts(Array.isArray(account.commercial_products) ? account.commercial_products : []);
+    fetchNotes(account.id);
+    setIsSidebarOpen(true);
+    setActiveTab('overview');
+  };
 
-    if (!error) {
-      addToast("Account updated successfully");
-      logAction(selectedAccount.id, "Updated account details");
-      fetchWonAccounts();
-      setSelectedAccount({ ...selectedAccount, ...editForm } as Account);
-      setShowEditModal(false);
-    } else {
-      addToast(error.message, 'error');
+  const handleSaveChanges = async () => {
+    if (!selectedAccount) return;
+    
+    // Sum up product values
+    const finalValue = products.reduce((acc, p) => acc + (Number(p.base_price) || 0), 0);
+
+    const { error } = await supabase.from('clients').update({
+      contract_value: finalValue,
+      commercial_products: products,
+      ...editForm,
+      last_interaction_at: new Date().toISOString(),
+    }).eq('id', selectedAccount.id);
+
+    if (error) alert("Error saving: " + error.message);
+    else {
+      await fetchAccounts();
+      setHasUnsavedChanges(false);
     }
   };
 
-  const handleQuickAction = async (id: string, action: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    addToast(`${action} action logged`);
-    await supabase.from('opportunities').update({ last_contacted_at: new Date().toISOString() }).eq('id', id);
-    logAction(id, `Performed quick action: ${action}`);
-    fetchWonAccounts();
+  // Product Handlers
+  const handleAddProduct = () => {
+    if (!newProduct.name) return alert("Product Name is required");
+    
+    const safePrice = Number(newProduct.base_price) || 0;
+    const safePercent = Number(newProduct.commission_percent) || 0;
+    const safeDeposit = Number(newProduct.deposit_amount) || 0;
+
+    setProducts([...products, { ...newProduct, id: Date.now(), base_price: safePrice, commission_percent: safePercent, deposit_amount: safeDeposit }]);
+    // Reset form
+    setNewProduct({ id: 0, name: '', type: 'fixed', base_price: 0, commission_percent: 0, deposit_amount: 0, deposit_date: '', deposit_paid: false });
   };
 
-  // --- SIDEBAR LOGIC ---
-  const handleMouseEnter = () => { 
-    if (hoverTimeout.current) clearTimeout(hoverTimeout.current); 
-    setIsSidebarExpanded(true);
-    hoverTimeout.current = setTimeout(() => setIsContentVisible(true), 200); 
-  };
-  const handleMouseLeave = () => { 
-    if (hoverTimeout.current) clearTimeout(hoverTimeout.current); 
-    setIsContentVisible(false); 
-    hoverTimeout.current = setTimeout(() => setIsSidebarExpanded(false), 200); 
+  const updateProduct = (index: number, field: string, value: any) => {
+    const updated = [...products];
+    updated[index] = { ...updated[index], [field]: value };
+    setProducts(updated);
   };
 
-  const sortedAccounts = useMemo(() => {
-    return [...accounts].sort((a, b) => {
-      if (sortBy === 'value') return (b.value || 0) - (a.value || 0);
-      if (sortBy === 'name') return a.company_name.localeCompare(b.company_name);
-      return new Date(b.won_at).getTime() - new Date(a.won_at).getTime();
-    }).filter(acc => acc.company_name.toLowerCase().includes(search.toLowerCase()));
-  }, [accounts, sortBy, search]);
-
-  const getTimeSinceWon = (dateString: string) => {
-    if (!dateString) return "Unknown";
-    const diffDays = Math.ceil(Math.abs(new Date().getTime() - new Date(dateString).getTime()) / (1000 * 60 * 60 * 24));
-    if (diffDays < 30) return `${diffDays}d ago`;
-    return `${Math.floor(diffDays / 30)}mo ago`;
+  const removeProduct = (index: number) => {
+    const updated = [...products];
+    updated.splice(index, 1);
+    setProducts(updated);
   };
 
-  const getHealthScore = (acc: Account) => {
-    if (!acc.last_contacted_at) return 50;
-    const days = (new Date().getTime() - new Date(acc.last_contacted_at).getTime()) / (1000 * 3600 * 24);
-    if (days < 14) return 98;
-    if (days < 30) return 85;
-    return 60;
+  // Note Handlers
+  const handleAddNote = async () => {
+    if (!newNote.trim()) return;
+    const { error } = await supabase.from('account_internal_notes').insert([{
+      client_id: selectedAccount.id, author_id: currentUser.id, content: newNote
+    }]);
+    await supabase.from('clients').update({ last_interaction_at: new Date().toISOString() }).eq('id', selectedAccount.id);
+    if (!error) { setNewNote(""); fetchNotes(selectedAccount.id); fetchAccounts(); }
   };
 
-  const portfolioMetrics = useMemo(() => {
-    const totalValue = accounts.reduce((sum, acc) => sum + (acc.value || 0), 0);
-    const avgHealth = accounts.length > 0 ? Math.round(accounts.reduce((sum, acc) => sum + getHealthScore(acc), 0) / accounts.length) : 0;
-    const staleCount = accounts.filter(acc => !acc.last_contacted_at || (new Date().getTime() - new Date(acc.last_contacted_at).getTime()) > 2592000000).length;
-    return { totalValue, avgHealth, staleCount, count: accounts.length };
-  }, [accounts]);
+  const handleProvisionAccount = async (lead: any) => {
+    if(!confirm(`Provision ${lead.company_name}?`)) return;
+    const { data: client, error } = await supabase.from('clients').insert([{ 
+        name: lead.company_name, domain: lead.company_name.toLowerCase().replace(/\s+/g, '') + ".com"
+    }]).select().single();
+    if (error) return alert(error.message);
 
-  // --- RENDER ---
-  if (loading) return <div className="flex h-screen items-center justify-center text-gray-400">Loading accounts...</div>;
+    await supabase.from('opportunities').update({ client_id: client.id }).eq('id', lead.id);
+    const nextYear = new Date(); nextYear.setFullYear(nextYear.getFullYear() + 1);
+    await supabase.from('client_portal_settings').insert([{
+      client_id: client.id, is_active: true, access_start_date: new Date().toISOString(), access_end_date: nextYear.toISOString(),
+      primary_color: '#2563eb', welcome_message: `Welcome to the ${lead.company_name} dashboard.`
+    }]);
+    fetchAccounts(); fetchOnboarding();
+  };
+
+  const toggleCollaborator = (staffId: string) => {
+    const current = editForm.collaborators || [];
+    if (current.includes(staffId)) {
+      setEditForm({ ...editForm, collaborators: current.filter((id: string) => id !== staffId) });
+    } else {
+      setEditForm({ ...editForm, collaborators: [...current, staffId] });
+    }
+  };
+
+  // --- RENDER HELPERS ---
+  const totalARR = accounts.reduce((sum, a) => sum + (a.contract_value || 0), 0);
+  const avgHealth = Math.round(accounts.reduce((sum, a) => sum + (a.healthScore || 0), 0) / (accounts.length || 1));
 
   return (
-    <div className="flex h-[calc(100vh-64px)] bg-gray-50 font-sans text-gray-900 overflow-hidden relative">
+    <div className="flex h-screen bg-slate-50 font-sans text-slate-900 overflow-hidden relative">
       
-      {/* TOASTS */}
-      <div className="fixed bottom-6 right-6 flex flex-col gap-2 z-[80]">
-        {toasts.map(t => (
-          <div key={t.id} className={`px-4 py-3 rounded-lg shadow-lg border text-sm font-medium flex items-center gap-3 bg-white animate-in slide-in-from-bottom-5 fade-in ${t.type === 'error' ? 'border-red-500 text-red-600' : 'border-green-500 text-gray-800'}`}>
-            {t.type === 'success' ? <CheckCircle size={16} className="text-green-500"/> : <AlertCircle size={16}/>} {t.message}
-          </div>
-        ))}
-      </div>
-
-      {/* SIDEBAR */}
-      <div 
-        className={`bg-white border-r border-gray-200 flex flex-col h-full transition-all duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] z-20 shadow-xl ${isSidebarExpanded ? 'w-80' : 'w-20'}`}
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
-      >
-        {/* Increased height (h-24) and top padding (pt-8) to move text down */}
-        <div className="px-4 pt-8 pb-4 border-b border-gray-100 flex items-center justify-between h-24 relative overflow-hidden cursor-pointer" onClick={() => setSelectedAccount(null)}>
-          <div className={`absolute left-0 top-0 h-full w-full flex items-center justify-center transition-opacity duration-300 ${isSidebarExpanded ? 'opacity-0' : 'opacity-100'}`}><PieChart className="text-purple-600" size={24} /></div>
-          <div className={`w-full transition-opacity duration-200 ${isContentVisible ? 'opacity-100' : 'opacity-0'}`}>
-            <div className="flex justify-between items-center mb-3"><h2 className="text-xs font-extrabold text-gray-400 uppercase tracking-widest whitespace-nowrap">Your Book</h2><Filter size={12} className="text-gray-400"/></div>
-            <div className="relative"><input type="text" placeholder="Filter..." className="w-full pl-9 pr-2 py-1.5 bg-gray-50 border border-gray-200 rounded text-xs outline-none focus:border-blue-500 transition-colors" value={search} onChange={(e) => setSearch(e.target.value)} /><Search className="absolute left-2.5 top-2 text-gray-400" size={12} /></div>
-          </div>
-        </div>
-
-        {isSidebarExpanded && (
-          <div className={`px-4 py-2 border-b border-gray-100 flex gap-2 overflow-hidden animate-in fade-in slide-in-from-top-2`}>
-             <button onClick={() => setSortBy('recent')} className={`text-[10px] px-2 py-1 rounded border ${sortBy==='recent' ? 'bg-purple-50 font-bold border-purple-200 text-purple-700' : 'border-transparent text-gray-500'}`}>Recent</button>
-             <button onClick={() => setSortBy('value')} className={`text-[10px] px-2 py-1 rounded border ${sortBy==='value' ? 'bg-purple-50 font-bold border-purple-200 text-purple-700' : 'border-transparent text-gray-500'}`}>Value</button>
-             <button onClick={() => setSortBy('name')} className={`text-[10px] px-2 py-1 rounded border ${sortBy==='name' ? 'bg-purple-50 font-bold border-purple-200 text-purple-700' : 'border-transparent text-gray-500'}`}>Name</button>
-          </div>
-        )}
+      {/* MAIN CONTENT AREA - No margin shifting, just sits behind */}
+      <div className={`flex-1 flex flex-col h-full w-full transition-all duration-300`}>
         
-        <div className="flex-1 overflow-y-auto scrollbar-hide">
-          {sortedAccounts.map(acc => {
-            const isStale = !acc.last_contacted_at || (new Date().getTime() - new Date(acc.last_contacted_at).getTime() > 2592000000); 
-            return (
-              <div 
-                key={acc.id}
-                onClick={() => setSelectedAccount(acc)}
-                className={`cursor-pointer transition-all group border-l-4 relative overflow-hidden h-20 flex items-center
-                  ${isSidebarExpanded ? 'px-4 border-b border-gray-50' : 'justify-center border-b border-gray-50'}
-                  ${selectedAccount?.id === acc.id ? 'bg-blue-50 border-l-blue-600' : 'hover:bg-gray-50 border-l-transparent'}`}
-              >
-                <div className={`w-10 h-10 rounded-full bg-gray-100 flex-shrink-0 flex items-center justify-center font-bold text-gray-600 text-sm border border-gray-200 transition-all duration-300 ${!isSidebarExpanded ? 'mx-auto' : 'mr-3'} relative`}>
-                  {acc.company_name.substring(0,2).toUpperCase()}
-                  {isStale && <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 border-2 border-white rounded-full"></span>}
-                </div>
-
-                <div className={`flex-1 min-w-0 transition-opacity duration-200 ${isContentVisible ? 'opacity-100' : 'opacity-0 hidden'}`}>
-                  <div className="flex justify-between items-center w-full">
-                    <div className="truncate pr-2">
-                      <h3 className={`text-sm font-bold truncate ${selectedAccount?.id === acc.id ? 'text-blue-900' : 'text-gray-800'}`}>{acc.company_name}</h3>
-                      <p className="text-xs text-gray-500 mt-0.5 truncate">{acc.lead_name}</p>
-                    </div>
-                    {selectedAccount?.id === acc.id ? <ChevronRight size={16} className="text-blue-500 flex-shrink-0" /> : 
-                      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button onClick={(e) => handleQuickAction(acc.id, 'Email', e)} className="p-1 hover:bg-gray-200 rounded text-gray-500"><Mail size={12}/></button>
-                        <button onClick={(e) => handleQuickAction(acc.id, 'Call', e)} className="p-1 hover:bg-gray-200 rounded text-gray-500"><Phone size={12}/></button>
-                      </div>
-                    }
-                  </div>
-                </div>
+        {/* Header */}
+        <header className="bg-white border-b border-slate-200 px-8 py-6 flex-shrink-0 z-10">
+          <div className="flex justify-between items-center mb-8">
+            <div>
+              <h1 className="text-2xl font-bold text-slate-900">Account Command</h1>
+              <p className="text-sm text-slate-500 mt-1">Portfolio performance & commercial management.</p>
+            </div>
+            <div className="flex gap-3">
+              <div className="bg-slate-100 p-1 rounded-lg flex text-sm font-medium">
+                <button onClick={() => setFilterMode('all')} className={`px-4 py-2 rounded-md transition-all ${filterMode === 'all' ? 'bg-white shadow text-slate-900' : 'text-slate-500 hover:text-slate-700'}`}>All</button>
+                <button onClick={() => setFilterMode('mine')} className={`px-4 py-2 rounded-md transition-all ${filterMode === 'mine' ? 'bg-white shadow text-slate-900' : 'text-slate-500 hover:text-slate-700'}`}>My Portfolio</button>
+                <button onClick={() => setFilterMode('risk')} className={`px-4 py-2 rounded-md transition-all ${filterMode === 'risk' ? 'bg-white shadow text-red-600' : 'text-slate-500 hover:text-red-600'}`}>At Risk</button>
               </div>
-            );
-          })}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-4 gap-6">
+             <div className="p-5 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
+                <div className="flex items-center justify-between mb-2">
+                   <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total TCV</p>
+                   <DollarSign size={16} className="text-green-600"/>
+                </div>
+                <p className="text-2xl font-light text-slate-900">${totalARR.toLocaleString()}</p>
+             </div>
+             <div className="p-5 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
+                <div className="flex items-center justify-between mb-2">
+                   <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Active Clients</p>
+                   <Building2 size={16} className="text-blue-600"/>
+                </div>
+                <p className="text-2xl font-light text-slate-900">{accounts.length}</p>
+             </div>
+             <div className="p-5 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
+                <div className="flex items-center justify-between mb-2">
+                   <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Avg Health</p>
+                   <Activity size={16} className="text-purple-600"/>
+                </div>
+                <div className="flex items-center gap-2">
+                   <p className="text-2xl font-light text-slate-900">{avgHealth}%</p>
+                   {avgHealth < 80 && <AlertCircle size={16} className="text-red-500"/>}
+                </div>
+             </div>
+             <div className="p-5 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
+                <div className="flex items-center justify-between mb-2">
+                   <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Onboarding</p>
+                   <LayoutDashboard size={16} className="text-orange-600"/>
+                </div>
+                <p className="text-2xl font-light text-slate-900">{onboardingQueue.length}</p>
+             </div>
+          </div>
+        </header>
+
+        {/* Scrollable Content */}
+        <div className="flex-1 overflow-y-auto p-8 space-y-8 bg-slate-50">
+          
+          {onboardingQueue.length > 0 && (
+            <div className="bg-orange-50/50 border border-orange-200 rounded-xl overflow-hidden">
+              <div className="px-6 py-3 bg-orange-50 border-b border-orange-200 flex justify-between items-center">
+                <h3 className="text-sm font-bold text-orange-900 flex items-center gap-2">
+                  <LayoutDashboard size={16} className="text-orange-600"/>
+                  Pending Setup
+                </h3>
+              </div>
+              <div className="divide-y divide-orange-100">
+                {onboardingQueue.map(lead => (
+                   <div key={lead.id} className="px-6 py-3 flex items-center justify-between hover:bg-orange-100/50 transition-colors">
+                      <span className="text-sm font-bold text-slate-800">{lead.company_name}</span>
+                      <button onClick={() => handleProvisionAccount(lead)} className="text-xs font-bold text-white bg-orange-600 px-3 py-1.5 rounded-lg hover:bg-orange-700 transition-colors">Initialize</button>
+                   </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Main Table */}
+          <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+            <div className="px-6 py-4 border-b border-slate-200 flex items-center gap-3">
+               <Search className="text-slate-400" size={16}/>
+               <input 
+                  type="text" 
+                  placeholder="Search portfolios..." 
+                  className="flex-1 outline-none text-sm bg-transparent"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+               />
+            </div>
+            <table className="w-full text-left">
+              <thead className="bg-slate-50 text-xs font-bold text-slate-400 uppercase tracking-wider">
+                <tr>
+                  <th className="px-6 py-3 font-semibold">Client</th>
+                  <th className="px-6 py-3 font-semibold">Value (USD)</th>
+                  <th className="px-6 py-3 font-semibold">Manager</th>
+                  <th className="px-6 py-3 font-semibold">Health</th>
+                  <th className="px-6 py-3 font-semibold text-right">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredAccounts.map(account => (
+                  <tr key={account.id} onClick={() => { handleSelectAccount(account); setIsSidebarOpen(true); }} className={`hover:bg-slate-50 cursor-pointer transition-colors ${selectedAccount?.id === account.id ? 'bg-blue-50/50' : ''}`}>
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-lg bg-slate-100 border border-slate-200 flex items-center justify-center font-bold text-slate-600 relative">
+                          {account.name.charAt(0)}
+                          {/* Missing Info Badge */}
+                          {account.missingCount > 0 && <span className="absolute -top-1 -right-1 h-4 w-4 bg-red-500 text-white text-[10px] flex items-center justify-center rounded-full border border-white shadow-sm">{account.missingCount}</span>}
+                        </div>
+                        <div>
+                          <p className="font-bold text-slate-900 text-sm">{account.name}</p>
+                          <p className="text-xs text-slate-500">{account.domain}</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <p className="text-sm font-mono font-medium text-slate-700">${account.contract_value?.toLocaleString() || '0'}</p>
+                    </td>
+                    <td className="px-6 py-4">
+                       <span className="text-xs text-slate-600 bg-slate-100 px-2 py-1 rounded-md">{account.owner?.email?.split('@')[0] || 'Unassigned'}</span>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-2">
+                        <div className={`w-2 h-2 rounded-full ${account.healthScore > 80 ? 'bg-green-500' : account.healthScore > 50 ? 'bg-orange-500' : 'bg-red-500'}`}></div>
+                        <span className="text-sm font-medium">{account.healthScore}%</span>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                       {account.client_portal_settings?.is_active ? (
+                          <span className="inline-flex items-center gap-1 text-xs font-bold text-green-700 bg-green-50 px-2 py-1 rounded-full border border-green-200">
+                             <CheckCircle size={10}/> Live
+                          </span>
+                       ) : (
+                          <span className="inline-flex items-center gap-1 text-xs font-bold text-slate-500 bg-slate-100 px-2 py-1 rounded-full border border-slate-200">
+                             <Clock size={10}/> Offline
+                          </span>
+                       )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
-      {/* MAIN DASHBOARD */}
-      <div className="flex-1 overflow-y-auto bg-white">
-        {!selectedAccount ? (
-          /* PORTFOLIO OVERVIEW */
-          <div className="max-w-5xl mx-auto p-12">
-            <div className="mb-10">
-              <h1 className="text-3xl font-extrabold text-gray-900 tracking-tight">Portfolio Overview</h1>
-              <p className="text-gray-500 mt-2">Aggregate view of your managed accounts.</p>
-            </div>
-            
-            <div className="grid grid-cols-3 gap-6 mb-12">
-              <div className="p-6 rounded-2xl bg-gradient-to-br from-purple-600 to-indigo-700 text-white shadow-lg">
-                <div className="flex items-center justify-between mb-4">
-                  <span className="text-sm font-bold opacity-80 uppercase tracking-wider">Total Revenue</span>
-                  <DollarSign size={20} className="opacity-80"/>
-                </div>
-                <div className="text-4xl font-bold tracking-tight">${portfolioMetrics.totalValue.toLocaleString()}</div>
-                <div className="mt-4 text-sm opacity-70 flex items-center gap-2"><TrendingUp size={14}/> Across {portfolioMetrics.count} accounts</div>
-              </div>
-              
-              <div className="p-6 rounded-2xl border border-gray-200 bg-white shadow-sm">
-                <div className="flex items-center justify-between mb-4">
-                  <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Avg Health</span>
-                  <Activity size={20} className="text-green-500"/>
-                </div>
-                <div className="text-4xl font-bold text-gray-900">{portfolioMetrics.avgHealth}/100</div>
-                <div className="mt-4 text-sm text-green-600 font-medium">Strong Performance</div>
-              </div>
-
-              <div className="p-6 rounded-2xl border border-gray-200 bg-white shadow-sm">
-                <div className="flex items-center justify-between mb-4">
-                  <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Engagement Risk</span>
-                  <AlertCircle size={20} className="text-orange-500"/>
-                </div>
-                <div className="text-4xl font-bold text-gray-900">{portfolioMetrics.staleCount}</div>
-                {/* Fixed the Unexpected Token error by escaping > */}
-                <div className="mt-4 text-sm text-orange-600 font-medium">Accounts need contact (&gt;30 days)</div>
-              </div>
-            </div>
-
-            <div className="p-8 rounded-xl border border-gray-200 bg-gray-50/50 text-center">
-              <Layers className="mx-auto text-gray-300 mb-3" size={48}/>
-              <h3 className="text-lg font-bold text-gray-900">Select an account from the sidebar</h3>
-              <p className="text-gray-500 mt-1">View detailed context, history, and manage stakeholders.</p>
-            </div>
-          </div>
-        ) : (
-          /* ACCOUNT DETAIL VIEW */
-          <div className="max-w-6xl mx-auto p-12">
-            <div className="flex justify-between items-start mb-10 pb-8 border-b border-gray-100">
-              <div>
-                <div className="flex items-center gap-4 mb-2">
-                  <h1 className="text-4xl font-extrabold text-gray-900 tracking-tight">{selectedAccount.company_name}</h1>
-                  <span className="px-3 py-1 bg-green-100 text-green-800 text-xs font-bold rounded-full uppercase tracking-wide">Active</span>
-                </div>
-                <div className="flex items-center gap-3 text-sm text-gray-500">
-                  <span className="flex items-center gap-1"><Shield size={14}/> {selectedAccount.industry || "General Industry"}</span>
-                  <span>•</span>
-                  <span className="flex items-center gap-1 text-blue-600 font-medium"><Clock size={14} /> {getTimeSinceWon(selectedAccount.won_at)}</span>
-                  {selectedAccount.campaigns && <span className="flex items-center gap-1 text-purple-600 bg-purple-50 px-2 py-0.5 rounded text-xs font-bold border border-purple-100"><Layers size={10}/> {selectedAccount.campaigns.name}</span>}
-                </div>
-              </div>
-              
-              <div className="flex gap-3">
-                <button className="px-5 py-2.5 bg-white border border-gray-200 text-gray-700 text-sm font-semibold rounded-lg hover:bg-gray-50 transition shadow-sm flex items-center gap-2" onClick={() => handleQuickAction(selectedAccount.id, 'Log Call', {} as any)}>
-                  <Phone size={16} /> Log Call
-                </button>
-                <button className="px-5 py-2.5 bg-gray-900 text-white text-sm font-semibold rounded-lg hover:bg-gray-800 transition shadow-md flex items-center gap-2" onClick={() => handleQuickAction(selectedAccount.id, 'Email', {} as any)}>
-                  <Mail size={16} /> Email POC
-                </button>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-4 gap-6 mb-12">
-              <div className="p-6 rounded-xl border border-gray-100 bg-gray-50/30">
-                <div className="flex items-center text-xs font-bold text-gray-400 uppercase tracking-wider mb-2"><TrendingUp size={14} className="mr-2" /> Annual Value</div>
-                <div className="text-3xl font-bold text-gray-900 tracking-tight">${selectedAccount.value?.toLocaleString() || "0"}</div>
-              </div>
-              <div className="p-6 rounded-xl border border-gray-100 bg-gray-50/30">
-                <div className="flex items-center text-xs font-bold text-gray-400 uppercase tracking-wider mb-2"><CheckCircle size={14} className="mr-2" /> Health</div>
-                <div className="text-3xl font-bold text-green-600 tracking-tight">{getHealthScore(selectedAccount)}/100</div>
-              </div>
-              <div className="p-6 rounded-xl border border-gray-100 bg-gray-50/30">
-                <div className="flex items-center text-xs font-bold text-gray-400 uppercase tracking-wider mb-2"><AlertCircle size={14} className="mr-2" /> Open Issues</div>
-                <div className="text-3xl font-bold text-gray-900 tracking-tight">0</div>
-              </div>
-              <div className="p-6 rounded-xl border border-gray-100 bg-white shadow-sm flex flex-col justify-between group cursor-pointer hover:border-blue-200 transition-colors" onClick={() => { setEditForm(selectedAccount); setShowEditModal(true); }}>
-                <div><div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">POC</div><div className="text-xl font-bold text-gray-900 truncate">{selectedAccount.lead_name}</div></div>
-                <div className="text-xs text-blue-600 font-medium flex items-center gap-1 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">Edit Details <ArrowUpRight size={12} /></div>
-              </div>
-            </div>
-
-            <div className="flex gap-8 border-b border-gray-200 mb-8">
-              {['overview', 'history', 'stakeholders', 'documents'].map((tab) => (
-                <button key={tab} onClick={() => setActiveTab(tab as any)} className={`pb-4 text-sm font-bold capitalize border-b-2 transition-colors ${activeTab === tab ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-800'}`}>
-                  {tab}
-                </button>
-              ))}
-            </div>
-
-            <div className="min-h-[300px]">
-              {activeTab === 'overview' && (
-                <div className="bg-white p-8 rounded-xl border border-gray-200 shadow-sm animate-in fade-in slide-in-from-bottom-2">
-                  <div className="flex justify-between items-center mb-4">
-                    <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2"><Activity size={20} className="text-purple-600" /> Account Context</h3>
-                    <button onClick={() => { setEditForm(selectedAccount); setShowEditModal(true); }} className="text-xs font-bold text-gray-400 hover:text-blue-600">Edit</button>
+      {/* --- EXTENDED SIDEBAR DRAWER (1000px) --- */}
+      {/* Overlay */}
+      {isSidebarOpen && (
+        <div 
+           className="fixed inset-0 bg-slate-900/30 backdrop-blur-[2px] z-40 transition-opacity"
+           onClick={() => { setIsSidebarOpen(false); setSelectedAccount(null); }}
+        ></div>
+      )}
+      
+      <div 
+        className={`fixed top-0 right-0 h-full w-[1000px] bg-white shadow-2xl border-l border-slate-200 transform transition-transform duration-300 z-50 flex flex-col ${isSidebarOpen && selectedAccount ? 'translate-x-0' : 'translate-x-full'}`}
+      >
+        {selectedAccount && (
+          <>
+            {/* Drawer Header */}
+            <div className="px-8 py-6 border-b border-slate-200 bg-slate-50 flex justify-between items-start">
+               <div className="flex items-center gap-5">
+                  <div className="w-16 h-16 rounded-2xl bg-white border border-slate-200 shadow-sm flex items-center justify-center text-3xl font-bold text-slate-800">
+                    {selectedAccount.name.charAt(0)}
                   </div>
-                  <div className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap font-medium">{selectedAccount.notes || "No additional context notes provided."}</div>
-                </div>
-              )}
-
-              {activeTab === 'history' && (
-                <div className="animate-in fade-in slide-in-from-bottom-2 max-w-3xl">
-                  {logs.length === 0 ? <p className="text-gray-400 italic">No history yet.</p> : (
-                    <div className="space-y-8 relative before:absolute before:left-[19px] before:top-2 before:bottom-4 before:w-[2px] before:bg-gray-200">
-                      {logs.map((log) => (
-                        <div key={log.id} className="relative pl-12 group">
-                          <div className="absolute left-3 top-1 w-4 h-4 rounded-full bg-white border-[3px] border-blue-200 group-hover:border-blue-500 transition-colors z-10"></div>
-                          <div className="flex flex-col gap-1">
-                            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">
-                              {new Date(log.created_at).toLocaleDateString()} • {new Date(log.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                            </span>
-                            <p className="text-sm text-gray-800 font-medium leading-snug">{log.action}</p>
-                            <span className="text-[10px] text-gray-400">by {log.user_email?.split('@')[0] || 'System'}</span>
-                          </div>
-                        </div>
-                      ))}
+                  <div>
+                    <h2 className="text-2xl font-bold text-slate-900">{selectedAccount.name}</h2>
+                    <div className="flex items-center gap-3 mt-1.5">
+                      <a href={`https://${selectedAccount.domain}`} target="_blank" className="text-xs text-blue-600 hover:underline flex items-center gap-1 font-medium bg-blue-50 px-2 py-0.5 rounded">
+                        {selectedAccount.domain} <ExternalLink size={10}/>
+                      </a>
+                      <span className="text-slate-300">|</span>
+                      <span className="text-xs text-slate-500">ID: {selectedAccount.id.slice(0,8)}</span>
                     </div>
-                  )}
-                </div>
-              )}
-
-              {(activeTab === 'stakeholders' || activeTab === 'documents') && (
-                <div className="flex flex-col items-center justify-center py-20 text-gray-400 border-2 border-dashed border-gray-200 rounded-xl">
-                  <Users size={32} className="mb-2 opacity-50"/>
-                  <p>Module coming soon.</p>
-                </div>
-              )}
+                  </div>
+               </div>
+               <button onClick={() => { setIsSidebarOpen(false); setSelectedAccount(null); }} className="p-2 hover:bg-slate-200 rounded-lg text-slate-500 transition-colors"><X size={24}/></button>
             </div>
-          </div>
+
+            {/* Navigation Tabs */}
+            <div className="flex border-b border-slate-200 px-8 gap-6 bg-slate-50/50">
+               {[
+                 { id: 'overview', label: 'Overview', icon: LayoutDashboard },
+                 { id: 'commercials', label: 'Commercials & Finance', icon: DollarSign, alert: missingFields.some(f => REQUIRED_COMMERCIALS.includes(f)) },
+                 { id: 'team', label: 'Team & Access', icon: Users, alert: missingFields.some(f => REQUIRED_OPS.includes(f)) },
+                 { id: 'notes', label: 'Internal War Room', icon: MessageSquare }
+               ].map((tab) => (
+                  <button 
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id as Tab)}
+                    className={`py-4 text-sm font-bold border-b-2 transition-colors flex items-center gap-2 ${activeTab === tab.id ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+                  >
+                    <tab.icon size={16} /> {tab.label}
+                    {tab.alert && <span className="h-2 w-2 rounded-full bg-red-500"></span>}
+                  </button>
+               ))}
+            </div>
+
+            {/* Drawer Content */}
+            <div className="flex-1 overflow-y-auto p-8 bg-white relative">
+               
+               {/* --- TAB: OVERVIEW --- */}
+               {activeTab === 'overview' && (
+                  <div className="space-y-8 animate-in fade-in duration-300">
+                     {/* Smart Health Card */}
+                     <div className="p-6 bg-gradient-to-br from-slate-50 to-white rounded-2xl border border-slate-200 shadow-sm relative overflow-visible">
+                        <div className="flex justify-between items-start mb-4 relative z-10">
+                           <div>
+                             <div className="flex items-center gap-2 mb-1">
+                               <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Account Health Score</p>
+                               {/* Tooltip fixed to prevent clipping by moving it out or using high z-index */}
+                               <div className="group relative">
+                                 <Info size={14} className="text-slate-400 cursor-help"/>
+                                 <div className="absolute left-6 top-0 w-80 bg-slate-900 text-white text-[11px] p-4 rounded-xl shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-[60] leading-relaxed">
+                                   <p className="font-bold text-slate-200 mb-2 border-b border-slate-700 pb-1">Scoring Logic:</p>
+                                   <ul className="space-y-1 text-slate-400 list-disc list-inside">
+                                     <li>Cost Basis: <strong>${editForm.hourly_rate_estimate}/hr</strong></li>
+                                     <li>Sourcing Budget: {editForm.budget_rule_percentage}% of Value</li>
+                                     <li>Target: <strong>{healthDetails?.hoursBudget} hours</strong> allocated</li>
+                                     <li>Penalties: Overdue (-40), Stale (-20), Low Margin (-25)</li>
+                                   </ul>
+                                 </div>
+                               </div>
+                             </div>
+                             <div className="flex items-baseline gap-2">
+                               <h3 className="text-5xl font-light text-slate-900">{healthDetails?.score}</h3>
+                               <span className="text-sm text-slate-400">/ 100</span>
+                             </div>
+                           </div>
+                           <div className={`p-3 rounded-xl ${healthDetails?.score > 80 ? 'bg-green-100 text-green-600' : 'bg-orange-100 text-orange-600'}`}>
+                             <Activity size={24}/>
+                           </div>
+                        </div>
+                        <div className="space-y-2 relative z-10">
+                           {healthDetails?.reason.map((r: string, i: number) => (
+                             <div key={i} className="flex items-center gap-2 text-xs font-medium text-slate-600">
+                               <div className={`w-2 h-2 rounded-full ${r.includes('+') ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                               {r}
+                             </div>
+                           ))}
+                        </div>
+                     </div>
+
+                     {/* Active Products List */}
+                     <div>
+                       <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider mb-3">Active Scope</h3>
+                       {products.length > 0 ? (
+                         <div className="grid grid-cols-2 gap-3">
+                           {products.map((p, idx) => (
+                             <div key={idx} className="p-3 bg-slate-50 border border-slate-100 rounded-lg flex justify-between items-center">
+                               <div>
+                                 <span className="text-sm font-bold text-slate-700 block">{p.name}</span>
+                                 <span className="text-[10px] text-slate-400">{p.type === 'commission' ? 'Commission' : 'Fixed'}</span>
+                               </div>
+                               <span className="text-xs font-mono bg-white px-2 py-1 rounded border border-slate-200">
+                                 ${p.base_price.toLocaleString()}
+                               </span>
+                             </div>
+                           ))}
+                         </div>
+                       ) : (
+                         <p className="text-sm text-slate-400 italic">No products/positions defined in Commercials.</p>
+                       )}
+                     </div>
+
+                     {/* Operations */}
+                     <div className="space-y-4">
+                        <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Timeline Operations</h3>
+                        <div className="grid grid-cols-2 gap-4">
+                           <div>
+                              <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Project Deadline</label>
+                              <input type="date" className="w-full p-3 border border-slate-300 rounded-xl text-sm" 
+                                value={editForm.project_deadline || ''} 
+                                onChange={e => setEditForm({...editForm, project_deadline: e.target.value})} 
+                              />
+                           </div>
+                           <div className="flex items-end">
+                              <button onClick={handleSaveChanges} className="w-full p-3 bg-slate-900 text-white rounded-xl text-sm font-bold hover:bg-slate-800 transition-colors">
+                                Update Timeline
+                              </button>
+                           </div>
+                        </div>
+                     </div>
+                  </div>
+               )}
+
+               {/* --- TAB: COMMERCIALS (Updated with Products) --- */}
+               {activeTab === 'commercials' && (
+                  <div className="space-y-8 animate-in fade-in duration-300 pb-20">
+                     
+                     <div className="grid grid-cols-2 gap-4">
+                       <div className="p-6 bg-blue-50/50 rounded-2xl border border-blue-100 flex items-center justify-between">
+                          <div>
+                            <p className="text-xs font-bold text-blue-700 uppercase tracking-wider mb-1">Total Contract Value</p>
+                            <p className="text-4xl font-light text-blue-900">${editForm.contract_value?.toLocaleString()}</p>
+                            <p className="text-xs text-blue-600 mt-1">Based on active products</p>
+                          </div>
+                          <DollarSign size={40} className="text-blue-200"/>
+                       </div>
+                       <div className="p-6 bg-emerald-50/50 rounded-2xl border border-emerald-100 flex items-center justify-between">
+                          <div>
+                            <p className="text-xs font-bold text-emerald-700 uppercase tracking-wider mb-1">Sourcing Budget</p>
+                            <p className="text-4xl font-light text-emerald-900">{healthDetails?.hoursBudget}h</p>
+                            <p className="text-xs text-emerald-600 mt-1">{editForm.budget_rule_percentage}% Budget Rule @ ${editForm.hourly_rate_estimate}/hr</p>
+                          </div>
+                          <Calculator size={40} className="text-emerald-200"/>
+                       </div>
+                     </div>
+
+                     {/* Product Builder */}
+                     <div className="space-y-4">
+                        <div className="flex justify-between items-center border-b border-slate-100 pb-2">
+                           <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2"><Briefcase size={14}/> Active Products</h4>
+                           {hasUnsavedChanges && <span className="text-xs text-orange-600 font-bold animate-pulse">Unsaved Changes</span>}
+                        </div>
+                        
+                        <div className="space-y-3">
+                           {products.map((prod, idx) => (
+                             <div key={prod.id || idx} className={`p-4 bg-slate-50 border rounded-xl space-y-3 transition-colors ${!prod.id ? 'border-orange-200 bg-orange-50/30' : 'border-slate-200'}`}>
+                                <div className="grid grid-cols-12 gap-3 items-center">
+                                    <div className="col-span-4"><input type="text" className="w-full bg-transparent font-bold text-sm text-slate-900 outline-none border-b border-transparent focus:border-blue-400 placeholder:text-slate-400" value={prod.name} onChange={(e) => updateProduct(idx, 'name', e.target.value)} placeholder="Position Name" /></div>
+                                    <div className="col-span-2"><select className="w-full bg-transparent text-xs uppercase font-bold text-slate-500 outline-none" value={prod.type} onChange={(e) => updateProduct(idx, 'type', e.target.value)}><option value="fixed">Fixed</option><option value="commission">Commission</option></select></div>
+                                    <div className="col-span-3 text-right">
+                                       <span className="text-xs text-slate-400 mr-1">{prod.type === 'commission' ? 'Est. Comm:' : 'Price:'}</span>
+                                       <input type="number" className="w-20 bg-transparent text-sm font-mono text-slate-700 text-right outline-none border-b border-transparent focus:border-blue-400" value={prod.base_price} onChange={(e) => updateProduct(idx, 'base_price', parseFloat(e.target.value) || 0)} />
+                                    </div>
+                                    <div className="col-span-2 text-right">
+                                       {prod.type === 'commission' && (
+                                         <div className="flex items-center justify-end gap-1">
+                                            <input type="number" className="w-10 bg-slate-200 text-xs px-1 rounded text-right" value={prod.commission_percent} onChange={(e) => updateProduct(idx, 'commission_percent', parseFloat(e.target.value) || 0)} />
+                                            <span className="text-xs text-slate-500">%</span>
+                                         </div>
+                                       )}
+                                    </div>
+                                    <div className="col-span-1 text-right"><button onClick={() => removeProduct(idx)} className="text-slate-400 hover:text-red-500"><Trash2 size={16}/></button></div>
+                                </div>
+                                
+                                {/* Deposit Logic */}
+                                <div className="flex items-center gap-3 pt-2 border-t border-slate-200/60">
+                                   <div className="flex items-center gap-2 text-xs text-slate-500">
+                                      <Wallet size={12}/>
+                                      Deposit: <input type="number" className="w-20 bg-slate-100 rounded px-1 text-right" value={prod.deposit_amount} onChange={(e) => updateProduct(idx, 'deposit_amount', parseFloat(e.target.value) || 0)} />
+                                   </div>
+                                   <div className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${Number(prod.deposit_amount) >= Number(prod.base_price) && Number(prod.base_price) > 0 ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'}`}>
+                                      {Number(prod.deposit_amount) >= Number(prod.base_price) && Number(prod.base_price) > 0 ? 'Fully Paid' : 'Partial'}
+                                   </div>
+                                </div>
+                             </div>
+                           ))}
+                           <button onClick={handleAddProduct} className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg text-xs font-bold border border-dashed border-slate-300 flex items-center justify-center gap-2"><Plus size={14}/> Add Position / Product</button>
+                        </div>
+                     </div>
+
+                     {/* Finance Form */}
+                     <div className="grid grid-cols-2 gap-8">
+                        <div className="space-y-5">
+                           <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2 flex items-center gap-2"><Activity size={14}/> Parameters</h4>
+                           <div className="grid grid-cols-2 gap-4">
+                             <div>
+                                <label className="text-xs font-bold text-slate-500 block mb-1">Hourly Cost Basis ($)</label>
+                                <input type="number" className="w-full p-3 border border-slate-300 rounded-xl text-sm" value={editForm.hourly_rate_estimate} onChange={e => setEditForm({...editForm, hourly_rate_estimate: parseFloat(e.target.value)})}/>
+                             </div>
+                             <div>
+                                <label className="text-xs font-bold text-slate-500 block mb-1">Budget Rule (%)</label>
+                                <select className="w-full p-3 border border-slate-300 rounded-xl text-sm bg-white" value={editForm.budget_rule_percentage} onChange={e => setEditForm({...editForm, budget_rule_percentage: parseFloat(e.target.value)})}>
+                                   <option value="10">10% Conservative</option><option value="15">15% Standard</option><option value="20">20% Aggressive</option><option value="25">25% High Growth</option>
+                                </select>
+                             </div>
+                           </div>
+                           <div className="bg-slate-50 p-3 rounded-lg text-xs text-slate-500 leading-relaxed border border-slate-200">
+                              Use these parameters to tune the Health Score sensitivity.
+                           </div>
+                        </div>
+
+                        <div className="space-y-5">
+                           <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2 flex items-center gap-2"><Receipt size={14}/> Billing & Tax</h4>
+                           <div className={`p-3 rounded-xl border ${!editForm.billing_contact_email ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200'}`}>
+                              <label className="text-xs font-bold text-slate-500 block mb-1">Finance Email { !editForm.billing_contact_email && <span className="text-red-500">*</span> }</label>
+                              <input type="email" className="w-full p-2 bg-white border border-slate-300 rounded-lg text-sm" value={editForm.billing_contact_email} onChange={e => setEditForm({...editForm, billing_contact_email: e.target.value})}/>
+                           </div>
+                           <div className="grid grid-cols-2 gap-3">
+                              <div><label className="text-xs font-bold text-slate-500 block mb-1">Tax ID { !editForm.tax_id && <span className="text-red-500">*</span> }</label><input type="text" className="w-full p-3 border border-slate-300 rounded-xl text-sm" value={editForm.tax_id} onChange={e => setEditForm({...editForm, tax_id: e.target.value})}/></div>
+                              <div><label className="text-xs font-bold text-slate-500 block mb-1">Tax %</label><input type="number" className="w-full p-3 border border-slate-300 rounded-xl text-sm" value={editForm.tax_percentage} onChange={e => setEditForm({...editForm, tax_percentage: parseFloat(e.target.value)})}/></div>
+                           </div>
+                           <div><label className="text-xs font-bold text-slate-500 block mb-1">Terms { !editForm.payment_terms && <span className="text-red-500">*</span> }</label><input type="text" className="w-full p-3 border border-slate-300 rounded-xl text-sm" value={editForm.payment_terms} onChange={e => setEditForm({...editForm, payment_terms: e.target.value})}/></div>
+                        </div>
+                     </div>
+                     
+                     <div className="pt-6 border-t border-slate-100 flex justify-end sticky bottom-0 bg-white p-4 -mx-8 shadow-inner z-20">
+                        <button onClick={handleSaveChanges} className={`px-6 py-3 text-white rounded-xl text-sm font-bold shadow-md transition-all flex items-center gap-2 ${hasUnsavedChanges ? 'bg-orange-500 hover:bg-orange-600' : 'bg-slate-900 hover:bg-slate-800'}`}>
+                           <Save size={16}/> {hasUnsavedChanges ? "Save Changes*" : "Saved"}
+                        </button>
+                     </div>
+                  </div>
+               )}
+
+               {/* --- TAB: TEAM --- */}
+               {activeTab === 'team' && (
+                  <div className="space-y-8 animate-in fade-in duration-300">
+                     <div className="bg-indigo-50 p-6 rounded-2xl border border-indigo-100 flex gap-4">
+                        <div className="p-2 bg-indigo-100 rounded-xl h-fit text-indigo-600"><Users size={24} /></div>
+                        <div>
+                          <h4 className="font-bold text-indigo-900 text-sm mb-1">Access Control</h4>
+                          <p className="text-xs text-indigo-800 leading-relaxed">
+                             Manage who can view and edit this account.
+                          </p>
+                        </div>
+                     </div>
+
+                     <div className="space-y-6">
+                       <div>
+                          <label className="text-xs font-bold text-slate-500 uppercase block mb-2">Account Owner</label>
+                          <select 
+                             className="w-full p-3 border border-slate-300 rounded-xl text-sm bg-white"
+                             value={editForm.owner_id || ''}
+                             onChange={(e) => setEditForm({...editForm, owner_id: e.target.value})}
+                          >
+                             <option value="">-- Assign Owner --</option>
+                             {internalStaff.map(s => <option key={s.id} value={s.id}>{s.email} (Owner)</option>)}
+                          </select>
+                       </div>
+
+                       <div>
+                          <label className="text-xs font-bold text-slate-500 uppercase block mb-2">Collaborators</label>
+                          {/* UPDATED MULTI-SELECT UI (Correct Grid Layout) */}
+                          <div className="grid grid-cols-2 gap-3">
+                             {internalStaff.filter(s => s.id !== editForm.owner_id).map(staff => (
+                                <div 
+                                  key={staff.id} 
+                                  onClick={() => toggleCollaborator(staff.id)}
+                                  className={`p-3 rounded-xl border cursor-pointer transition-all flex items-center justify-between ${editForm.collaborators?.includes(staff.id) ? 'bg-indigo-50 border-indigo-200 ring-1 ring-indigo-200' : 'bg-white border-slate-200 hover:border-slate-300'}`}
+                                >
+                                   <div className="flex items-center gap-2">
+                                      <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${editForm.collaborators?.includes(staff.id) ? 'bg-indigo-200 text-indigo-800' : 'bg-slate-100 text-slate-500'}`}>
+                                         {staff.email.charAt(0).toUpperCase()}
+                                      </div>
+                                      <span className={`text-sm font-medium ${editForm.collaborators?.includes(staff.id) ? 'text-indigo-900' : 'text-slate-600'}`}>{staff.email.split('@')[0]}</span>
+                                   </div>
+                                   {editForm.collaborators?.includes(staff.id) && <CheckCircle size={16} className="text-indigo-600"/>}
+                                </div>
+                             ))}
+                          </div>
+                          {internalStaff.length === 0 && <p className="text-xs text-slate-400">No other staff available.</p>}
+                       </div>
+                       
+                       <div className="pt-6 border-t border-slate-100 flex justify-end sticky bottom-0 bg-white p-4 -mx-8 shadow-inner z-20">
+                        <button onClick={handleSaveChanges} className="px-6 py-3 bg-slate-900 text-white rounded-xl text-sm font-bold shadow-md hover:bg-slate-800 transition-all flex items-center gap-2"><Save size={16}/> Update Permissions</button>
+                     </div>
+                     </div>
+                  </div>
+               )}
+
+               {/* --- TAB: NOTES --- */}
+               {activeTab === 'notes' && (
+                  <div className="flex flex-col h-full animate-in fade-in duration-300">
+                     <div className="flex-1 overflow-y-auto space-y-4 mb-6 pr-2">
+                        {notes.map(note => (
+                           <div key={note.id} className="bg-yellow-50/50 p-4 rounded-xl border border-yellow-100 text-sm relative group">
+                              <div className="flex justify-between items-center mb-2">
+                                 <div className="flex items-center gap-2"><div className="w-6 h-6 rounded-full bg-yellow-200 text-yellow-800 flex items-center justify-center text-[10px] font-bold">{note.profiles?.email.charAt(0).toUpperCase()}</div><span className="font-bold text-xs text-slate-700">{note.profiles?.email.split('@')[0]}</span></div>
+                                 <span className="text-[10px] text-slate-400 font-mono">{new Date(note.created_at).toLocaleString()}</span>
+                              </div>
+                              <p className="text-slate-800 leading-relaxed">{note.content}</p>
+                           </div>
+                        ))}
+                     </div>
+                     <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                        <textarea 
+                           className="w-full p-3 bg-white border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none resize-none"
+                           rows={3}
+                           placeholder="Type internal note (hidden from client)..."
+                           value={newNote}
+                           onChange={(e) => setNewNote(e.target.value)}
+                        />
+                        <div className="flex justify-between items-center mt-3">
+                           <span className="text-xs text-slate-400"><strong>Tip:</strong> These notes are visible to all collaborators.</span>
+                           <button onClick={handleAddNote} className="px-6 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700 shadow-sm">
+                              Post Note
+                           </button>
+                        </div>
+                     </div>
+                  </div>
+               )}
+
+            </div>
+          </>
         )}
       </div>
 
-      {/* --- EDIT MODAL --- */}
-      {showEditModal && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[90] p-4" onClick={() => setShowEditModal(false)}>
-          <div className="bg-white rounded-xl w-full max-w-2xl shadow-2xl p-8" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-xl font-bold text-gray-900 mb-6">Edit Account</h3>
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div><label className="text-xs font-bold text-gray-500 uppercase">Company Name</label><input className="w-full p-2 border rounded mt-1 text-sm" value={editForm.company_name || ''} onChange={e => setEditForm({...editForm, company_name: e.target.value})} /></div>
-                <div><label className="text-xs font-bold text-gray-500 uppercase">Industry</label><input className="w-full p-2 border rounded mt-1 text-sm" value={editForm.industry || ''} onChange={e => setEditForm({...editForm, industry: e.target.value})} /></div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div><label className="text-xs font-bold text-gray-500 uppercase">POC Name</label><input className="w-full p-2 border rounded mt-1 text-sm" value={editForm.lead_name || ''} onChange={e => setEditForm({...editForm, lead_name: e.target.value})} /></div>
-                <div><label className="text-xs font-bold text-gray-500 uppercase">POC Role</label><input className="w-full p-2 border rounded mt-1 text-sm" value={editForm.lead_role || ''} onChange={e => setEditForm({...editForm, lead_role: e.target.value})} /></div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div><label className="text-xs font-bold text-gray-500 uppercase">Email</label><input className="w-full p-2 border rounded mt-1 text-sm" value={editForm.email || ''} onChange={e => setEditForm({...editForm, email: e.target.value})} /></div>
-                <div><label className="text-xs font-bold text-gray-500 uppercase">Phone</label><input className="w-full p-2 border rounded mt-1 text-sm" value={editForm.phone || ''} onChange={e => setEditForm({...editForm, phone: e.target.value})} /></div>
-              </div>
-              <div><label className="text-xs font-bold text-gray-500 uppercase">Value</label><input type="number" className="w-full p-2 border rounded mt-1 text-sm" value={editForm.value || 0} onChange={e => setEditForm({...editForm, value: Number(e.target.value)})} /></div>
-              <div><label className="text-xs font-bold text-gray-500 uppercase">Notes</label><textarea className="w-full p-2 border rounded mt-1 text-sm h-24" value={editForm.notes || ''} onChange={e => setEditForm({...editForm, notes: e.target.value})}></textarea></div>
-            </div>
-            <div className="flex justify-end gap-3 mt-8">
-              <button onClick={() => setShowEditModal(false)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg text-sm">Cancel</button>
-              <button onClick={handleEditSubmit} className="px-6 py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 shadow-md text-sm">Save Changes</button>
-            </div>
-          </div>
-        </div>
+      {/* OVERLAY FOR SIDEBAR */}
+      {isSidebarOpen && selectedAccount && (
+        <div 
+           className="fixed inset-0 bg-slate-900/20 backdrop-blur-sm z-40 transition-opacity"
+           onClick={() => { setIsSidebarOpen(false); setSelectedAccount(null); }}
+        ></div>
       )}
+
     </div>
   );
 }
