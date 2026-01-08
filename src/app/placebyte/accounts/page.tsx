@@ -10,6 +10,7 @@ import {
   Info, UserPlus, Trash2, Calculator, Percent, Wallet, Send
 } from "lucide-react";
 import Link from "next/link";
+import ContractViewer from "@/components/ContractViewer"; // Import the new component
 
 // --- TYPES ---
 type Tab = 'overview' | 'commercials' | 'team' | 'notes';
@@ -45,6 +46,9 @@ export default function AccountsDashboard() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   
+  // Contract Viewer State (New)
+  const [isContractOpen, setIsContractOpen] = useState(false);
+
   // Edit State
   const [editForm, setEditForm] = useState<any>({});
   const [products, setProducts] = useState<Product[]>([]);
@@ -206,6 +210,7 @@ export default function AccountsDashboard() {
     const health = calculateHealthScore(account);
     setHealthDetails(health);
     
+    // Add contract_url to state
     const startForm = {
       ...account,
       owner_id: account.owner_id || currentUser?.id, 
@@ -223,7 +228,8 @@ export default function AccountsDashboard() {
       billing_contact_email: account.billing_contact_email || '',
       billing_address: account.billing_address || '',
       tax_id: account.tax_id || '',
-      payment_terms: account.payment_terms || 'Net 30'
+      payment_terms: account.payment_terms || 'Net 30',
+      contract_url: account.contract_url || '' // New field
     };
 
     const startProducts = Array.isArray(account.commercial_products) ? account.commercial_products : [];
@@ -233,10 +239,18 @@ export default function AccountsDashboard() {
     setInitialState(JSON.stringify({ form: startForm, products: startProducts }));
     setHasUnsavedChanges(false);
     
+    // Reset Views
     fetchNotes(account.id);
     setIsSidebarOpen(true);
+    setIsContractOpen(false); // Start with contract closed
     setActiveTab('overview');
   };
+
+  const handleCloseSidebar = () => {
+    setIsSidebarOpen(false);
+    setIsContractOpen(false);
+    setSelectedAccount(null);
+  }
 
   // --- SAVE LOGIC ---
   const handleSaveChanges = async () => {
@@ -281,6 +295,10 @@ export default function AccountsDashboard() {
       setInitialState(JSON.stringify({ form: { ...editForm, contract_value: finalValue }, products: products }));
       setHasUnsavedChanges(false);
     }
+  };
+
+  const handleUpdateContractUrl = (url: string) => {
+    setEditForm({ ...editForm, contract_url: url });
   };
 
   const handleAddProduct = () => {
@@ -540,10 +558,19 @@ export default function AccountsDashboard() {
       {isSidebarOpen && (
         <div 
            className="fixed inset-0 bg-slate-900/30 backdrop-blur-[2px] z-40 transition-opacity"
-           onClick={() => { setIsSidebarOpen(false); setSelectedAccount(null); }}
+           onClick={handleCloseSidebar}
         ></div>
       )}
       
+      {/* CONTRACT VIEWER - Sits to the left of the 1000px sidebar */}
+      <ContractViewer 
+        isOpen={isContractOpen}
+        contractUrl={editForm.contract_url}
+        onClose={() => setIsContractOpen(false)}
+        onUpdateUrl={handleUpdateContractUrl}
+        sidebarWidth="1000px"
+      />
+
       <div 
         className={`fixed top-0 right-0 h-full w-[1000px] bg-white shadow-2xl border-l border-slate-200 transform transition-transform duration-300 z-50 flex flex-col ${isSidebarOpen && selectedAccount ? 'translate-x-0' : 'translate-x-full'}`}
       >
@@ -565,7 +592,15 @@ export default function AccountsDashboard() {
                     </div>
                   </div>
                </div>
-               <button onClick={() => { setIsSidebarOpen(false); setSelectedAccount(null); }} className="p-2 hover:bg-slate-200 rounded-lg text-slate-500 transition-colors"><X size={24}/></button>
+               <div className="flex items-center gap-3">
+                 <button 
+                    onClick={() => setIsContractOpen(!isContractOpen)}
+                    className={`px-3 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 border ${isContractOpen ? 'bg-blue-100 border-blue-200 text-blue-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+                 >
+                    <FileText size={16}/> Contract
+                 </button>
+                 <button onClick={handleCloseSidebar} className="p-2 hover:bg-slate-200 rounded-lg text-slate-500 transition-colors"><X size={24}/></button>
+               </div>
             </div>
 
             <div className="flex border-b border-slate-200 px-8 gap-6 bg-slate-50/50 flex-shrink-0">
@@ -895,7 +930,7 @@ export default function AccountsDashboard() {
       {isSidebarOpen && selectedAccount && (
         <div 
            className="fixed inset-0 bg-slate-900/20 backdrop-blur-sm z-40 transition-opacity"
-           onClick={() => { setIsSidebarOpen(false); setSelectedAccount(null); }}
+           onClick={handleCloseSidebar}
         ></div>
       )}
 
