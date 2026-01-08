@@ -69,6 +69,8 @@ export default function AccountsDashboard() {
   // Calculated
   const [healthDetails, setHealthDetails] = useState<any>(null);
 
+  const [initialState, setInitialState] = useState<string>("");
+
   useEffect(() => {
     init();
   }, []);
@@ -80,7 +82,7 @@ export default function AccountsDashboard() {
   // Dirty State Tracker & Live Calc
   useEffect(() => {
     if (selectedAccount) {
-      setHasUnsavedChanges(true);
+      // Note: We REMOVED setHasUnsavedChanges(true) from here
       
       const allRequired = [...REQUIRED_COMMERCIALS, ...REQUIRED_OPS];
       const missing = allRequired.filter(f => !editForm[f]);
@@ -98,8 +100,13 @@ export default function AccountsDashboard() {
       // Update health details live
       const updatedAccount = { ...selectedAccount, ...updatedForm, commercial_products: products };
       setHealthDetails(calculateHealthScore(updatedAccount));
+
+      // --- NEW LOGIC: Compare Current vs Initial ---
+      const currentState = JSON.stringify({ form: editForm, products: products });
+      // Only show "Save Changes" if the data is actually different
+      setHasUnsavedChanges(currentState !== initialState);
     }
-  }, [products, editForm.budget_rule_percentage, editForm.hourly_rate_estimate, editForm]);
+  }, [products, editForm, selectedAccount, initialState]);
 
   // Prevent background scroll
   useEffect(() => {
@@ -205,20 +212,18 @@ export default function AccountsDashboard() {
     setSelectedAccount(account);
     const health = calculateHealthScore(account);
     setHealthDetails(health);
-    setHasUnsavedChanges(false);
     
-    setEditForm({
+    // 1. Prepare the exact form object with all defaults
+    const startForm = {
       ...account,
       owner_id: account.owner_id || currentUser?.id, 
       pricing_plan: account.pricing_plan || 'Recruitment - Fixed',
       contract_value: account.contract_value || 0,
       hourly_rate_estimate: account.hourly_rate_estimate || 10,
       budget_rule_percentage: account.budget_rule_percentage || 15,
-      tax_percentage: account.tax_percentage || 12, // Default to 12% (PH)
+      tax_percentage: account.tax_percentage || 12,
       visibility: account.visibility || 'public',
       collaborators: account.collaborators || [], 
-      
-      // Defaults
       contract_start_date: account.contract_start_date || '',
       contract_end_date: account.contract_end_date || '',
       project_deadline: account.project_deadline || '',
@@ -227,9 +232,18 @@ export default function AccountsDashboard() {
       billing_address: account.billing_address || '',
       tax_id: account.tax_id || '',
       payment_terms: account.payment_terms || 'Net 30'
-    });
+    };
+
+    const startProducts = Array.isArray(account.commercial_products) ? account.commercial_products : [];
+
+    // 2. Set State
+    setEditForm(startForm);
+    setProducts(startProducts);
     
-    setProducts(Array.isArray(account.commercial_products) ? account.commercial_products : []);
+    // 3. Save Snapshot (Stringify ensures deep comparison works later)
+    setInitialState(JSON.stringify({ form: startForm, products: startProducts }));
+    setHasUnsavedChanges(false);
+
     fetchNotes(account.id);
     setIsSidebarOpen(true);
     setActiveTab('overview');
@@ -241,10 +255,45 @@ export default function AccountsDashboard() {
     // Sum up product values
     const finalValue = products.reduce((acc, p) => acc + (Number(p.base_price) || 0), 0);
 
+    // 1. Destructure to separate valid DB columns from UI-only/Joined data
+    const { 
+      // UI-only calculated fields
+      healthReason, 
+      healthScore, 
+      missingCount,
+      
+      // Joined tables (Cannot be updated directly on 'clients')
+      client_portal_settings, 
+      owner,
+      
+      // Remove stale products so we can use the fresh 'products' state
+      commercial_products,
+
+      // System fields
+      id, 
+      created_at,
+      
+      ...cleanForm 
+    } = editForm;
+
+    // 2. Sanitize Date Fields (Fixes the "invalid input syntax" error)
+    // We create a copy so we don't mutate the UI state directly
+    const payload = { ...cleanForm };
+    
+    const dateFields = ['contract_start_date', 'contract_end_date', 'project_deadline'];
+    
+    dateFields.forEach((field) => {
+      // If the field is an empty string, set it to null for the DB
+      if (payload[field] === "") {
+        payload[field] = null;
+      }
+    });
+
+    // 3. Send update
     const { error } = await supabase.from('clients').update({
+      ...payload,
       contract_value: finalValue,
       commercial_products: products,
-      ...editForm,
       last_interaction_at: new Date().toISOString(),
     }).eq('id', selectedAccount.id);
 
