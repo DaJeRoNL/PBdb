@@ -1,6 +1,7 @@
 "use client";
-import { useState, useEffect } from "react";
-import { X, Link as LinkIcon, ExternalLink, FileText, Lock, Check, RotateCcw, ShieldCheck, Eye, FolderOpen, Loader2 } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { supabase } from "@/lib/supabaseClient";
+import { X, Link as LinkIcon, ExternalLink, FileText, Check, RotateCcw, FolderOpen, Loader2, AlertTriangle, RefreshCw } from "lucide-react";
 
 // Types for Google Picker API
 declare global {
@@ -23,13 +24,21 @@ export default function ContractViewer({
   contractUrl, 
   onClose, 
   onUpdateUrl,
-  sidebarWidth = "1000px" 
+  sidebarWidth = "1000px",
 }: ContractViewerProps) {
+
   const [isEditing, setIsEditing] = useState(false);
   const [tempUrl, setTempUrl] = useState("");
-  const [iframeKey, setIframeKey] = useState(0); 
   const [isPickerLoading, setIsPickerLoading] = useState(false);
   const [isGoogleReady, setIsGoogleReady] = useState(false);
+  
+  // PDF State
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [isLoadingPdf, setIsLoadingPdf] = useState(false);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+  
+  // Refresh Trigger State (Fixes the "No Contract Attached" bug)
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   // Constants
   const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_API_KEY;
@@ -37,6 +46,24 @@ export default function ContractViewer({
   const APP_ID = process.env.NEXT_PUBLIC_GOOGLE_APP_ID;
   const DEFAULT_FOLDER_ID = "1igRV-Ulo-cvTtFAqS1Ag1Z57H_oyT1JF";
 
+  // Helper: Construct Proxy URL
+  const getProxyUrl = useCallback((url: string) => {
+    if (!url) return "";
+    if (url.startsWith('/api/drive-proxy')) return url;
+
+    // Standard Drive URL
+    const idRegex = /\/d\/([-\w]{25,})/;
+    const match = url.match(idRegex);
+    if (match && match[1]) return `/api/drive-proxy?fileId=${match[1]}`;
+    
+    // Picker URL format
+    const queryId = url.match(/id=([-\w]{25,})/);
+    if (queryId && queryId[1]) return `/api/drive-proxy?fileId=${queryId[1]}`;
+    
+    return "";
+  }, []);
+
+  // --- EFFECT: Handle Edit Mode on Open ---
   useEffect(() => {
     setTempUrl(contractUrl || "");
     if (!contractUrl) {
@@ -46,15 +73,92 @@ export default function ContractViewer({
     }
   }, [contractUrl, isOpen]);
 
-  // Load Google Scripts
+  // --- MAIN LOGIC: ROBUST SECURE FETCH ---
+  useEffect(() => {
+    // 1. Cleanup previous state
+    if (blobUrl) URL.revokeObjectURL(blobUrl);
+    setBlobUrl(null);
+    setPdfError(null);
+
+    const proxySrc = contractUrl ? getProxyUrl(contractUrl) : "";
+    if (!isOpen || !proxySrc || isEditing) return;
+
+    let isMounted = true;
+
+    const fetchPdfWithRetry = async (retry = true) => {
+      setIsLoadingPdf(true);
+      try {
+        // A. GET FRESH TOKEN
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        
+        if (sessionError || !session?.access_token) {
+           throw new Error("Authentication missing. Please log in.");
+        }
+
+        const token = session.access_token;
+
+        // B. ATTEMPT FETCH
+        const res = await fetch(proxySrc, { 
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          credentials: 'include', 
+          cache: 'no-store',
+        });
+
+        // C. HANDLE 401 (AUTO-REFRESH)
+        if (res.status === 401 && retry) {
+           console.log("Token expired, attempting refresh...");
+           // Force refresh session
+           await supabase.auth.refreshSession();
+           // Retry once with false flag
+           return fetchPdfWithRetry(false);
+        }
+
+        if (!res.ok) {
+           const errData = await res.json().catch(() => ({}));
+           throw new Error(errData.error || `Access Denied (${res.status})`);
+        }
+
+        // D. SUCCESS
+        const blob = await res.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        
+        if (isMounted) {
+            setBlobUrl(objectUrl);
+            setPdfError(null);
+        }
+
+      } catch (err: any) {
+        console.error("Secure PDF Load Failed:", err);
+        if (isMounted) {
+            setPdfError(err.message || "Failed to load document");
+        }
+      } finally {
+        if (isMounted) {
+            setIsLoadingPdf(false);
+        }
+      }
+    };
+
+    fetchPdfWithRetry();
+
+    return () => {
+      isMounted = false;
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+    };
+  }, [contractUrl, isOpen, isEditing, getProxyUrl, supabase.auth, refreshTrigger]); // Added refreshTrigger to dependency array
+
+
+  // --- GOOGLE SCRIPTS & PICKER ---
   useEffect(() => {
     if (isOpen) {
         if (!window.gapi) {
           const gapiScript = document.createElement("script");
           gapiScript.src = "https://apis.google.com/js/api.js";
-          gapiScript.onload = () => {
-              window.gapi.load('picker', () => {});
-          };
+          gapiScript.onload = () => { window.gapi.load('picker', () => {}); };
           document.body.appendChild(gapiScript);
         }
 
@@ -63,9 +167,7 @@ export default function ContractViewer({
           gisScript.src = "https://accounts.google.com/gsi/client";
           gisScript.async = true;
           gisScript.defer = true;
-          gisScript.onload = () => {
-               setIsGoogleReady(true);
-          };
+          gisScript.onload = () => { setIsGoogleReady(true); };
           document.body.appendChild(gisScript);
         } else {
           setIsGoogleReady(true);
@@ -73,38 +175,26 @@ export default function ContractViewer({
     }
   }, [isOpen]);
 
-  // --- GOOGLE PICKER LOGIC ---
   const handleOpenPicker = () => {
-    if (!isGoogleReady || !window.google || !window.google.accounts || !window.google.accounts.oauth2) {
-        return;
-    }
-
+    if (!isGoogleReady || !window.google || !window.google.accounts || !window.google.accounts.oauth2) return;
     setIsPickerLoading(true);
     
-    // Request broader scope to find files
-    const scope = [
-        'https://www.googleapis.com/auth/drive.file',
-        'https://www.googleapis.com/auth/drive.readonly'
-    ];
-
-  const tokenClient = window.google.accounts.oauth2.initTokenClient({
+    const tokenClient = window.google.accounts.oauth2.initTokenClient({
         client_id: CLIENT_ID,
-        scope: scope.join(' '),
+        scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly',
         callback: async (response: any) => {
             if (response.error !== undefined) {
-                // FIX: Removed sensitive response object logging
-                console.error("Google Auth Error: Authorization failed.");
+                console.error("Google Auth Error");
                 setIsPickerLoading(false);
                 return;
             }
             createPicker(response.access_token);
         },
     });
-    
     tokenClient.requestAccessToken({ prompt: '' }); 
   };
 
-  const createPicker = (accessToken: string) => {
+  const createPicker = (googleAccessToken: string) => {
     if (!window.gapi || !window.google || !window.google.picker) {
         setIsPickerLoading(false);
         return;
@@ -118,7 +208,7 @@ export default function ContractViewer({
 
     const picker = new window.google.picker.PickerBuilder()
         .addView(view)
-        .setOAuthToken(accessToken)
+        .setOAuthToken(googleAccessToken)
         .setDeveloperKey(API_KEY!)
         .setAppId(APP_ID!)
         .setCallback(async (data: any) => {
@@ -127,25 +217,24 @@ export default function ContractViewer({
                 const fileUrl = doc[window.google.picker.Document.URL];
                 const fileId = doc[window.google.picker.Document.ID];
 
-                // 1. Grant Permission (Silent) via Proxy
+                // Grant Permission (Optimistic)
                 try {
+                    const { data: { session } } = await supabase.auth.getSession();
                     await fetch('/api/drive-permission', {
                         method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({ fileId, accessToken })
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${session?.access_token}`
+                        },
+                        body: JSON.stringify({ fileId, accessToken: googleAccessToken }), 
                     });
                 } catch (e) {
-                    // FIX: Sanitized log
-                    console.warn("Permission grant skipped or failed silently.");
+                    console.warn("Permission grant skipped.", e);
                 }
 
-                // 2. Set URL to the DRIVE URL first for reference
                 onUpdateUrl(fileUrl);
                 setTempUrl(fileUrl);
-
-                // 3. Switch to view mode
                 setIsEditing(false);
-                setTimeout(() => setIframeKey(prev => prev + 1), 500);
             }
             setIsPickerLoading(false);
         })
@@ -153,27 +242,7 @@ export default function ContractViewer({
     picker.setVisible(true);
   };
   
-  const getProxyUrl = (url: string) => {
-    if (!url) return "";
-    if (url.startsWith('/api/drive-proxy')) return url;
-
-    // Standard Drive URL
-    const idRegex = /\/d\/([-\w]{25,})/;
-    const match = url.match(idRegex);
-    if (match && match[1]) {
-      return `/api/drive-proxy?fileId=${match[1]}`;
-    }
-    
-    // Picker URL format
-    const queryId = url.match(/id=([-\w]{25,})/);
-    if (queryId && queryId[1]) {
-        return `/api/drive-proxy?fileId=${queryId[1]}`;
-    }
-    return "";
-  };
-
   if (!isOpen) return null;
-  const proxySrc = contractUrl ? getProxyUrl(contractUrl) : "";
 
   return (
     <div 
@@ -189,9 +258,22 @@ export default function ContractViewer({
         <div className="flex items-center gap-2">
           {!isEditing && contractUrl && (
             <>
-              <button onClick={() => setIframeKey(p => p + 1)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg"><RotateCcw size={18} /></button>
-              <a href={contractUrl} target="_blank" rel="noreferrer" className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg"><ExternalLink size={18} /></a>
-              <button onClick={() => setIsEditing(true)} className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg"><LinkIcon size={18} /></button>
+              {/* REFRESH BUTTON UPDATED HERE */}
+              <button 
+                onClick={() => { 
+                    setBlobUrl(null); 
+                    setIsEditing(false); 
+                    setPdfError(null);
+                    setRefreshTrigger(prev => prev + 1); 
+                }} 
+                title="Refresh" 
+                className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg"
+              >
+                <RotateCcw size={18} />
+              </button>
+
+              <a href={contractUrl} target="_blank" rel="noreferrer" title="Open in Drive" className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg"><ExternalLink size={18} /></a>
+              <button onClick={() => setIsEditing(true)} title="Change File" className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg"><LinkIcon size={18} /></button>
             </>
           )}
           <button onClick={onClose} className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg"><X size={20} /></button>
@@ -199,7 +281,6 @@ export default function ContractViewer({
       </div>
 
       <div className="flex-1 bg-slate-200 overflow-hidden relative group">
-        {/* EDIT MODE */}
         {isEditing ? (
           <div className="absolute inset-0 flex items-center justify-center p-8 bg-slate-50/95 backdrop-blur-sm z-50">
             <div className="bg-white p-8 rounded-xl shadow-xl border border-slate-300 max-w-md w-full text-center">
@@ -208,13 +289,15 @@ export default function ContractViewer({
               <p className="text-sm text-slate-500 mb-6">Choose a file from Google Drive or paste a link.</p>
               
               <div className="space-y-4">
-                 {/* GOOGLE PICKER BUTTON */}
                  <button 
                     onClick={handleOpenPicker}
                     disabled={isPickerLoading || !isGoogleReady}
                     className="w-full py-3 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
                  >
-                    {isPickerLoading ? <Loader2 className="animate-spin" size={18}/> : <img src="/google-drive.svg" alt="Drive" className="w-5 h-5" onError={(e) => (e.currentTarget.style.display = 'none')}/>}
+                    {isPickerLoading ? <Loader2 className="animate-spin" size={18}/> : (
+                        // Fallback icon if svg missing
+                        <div className="w-5 h-5 bg-green-500 rounded-sm flex items-center justify-center text-[10px] text-white font-bold">D</div>
+                    )}
                     {isPickerLoading ? "Connecting..." : !isGoogleReady ? "Loading..." : "Browse Google Drive"}
                  </button>
 
@@ -233,7 +316,7 @@ export default function ContractViewer({
                         onChange={(e) => setTempUrl(e.target.value)}
                     />
                     <button 
-                        onClick={() => { onUpdateUrl(tempUrl); setIsEditing(false); setIframeKey(p => p+1); }}
+                        onClick={() => { onUpdateUrl(tempUrl); setIsEditing(false); }}
                         disabled={!tempUrl}
                         className="px-4 bg-slate-900 text-white rounded-lg font-bold hover:bg-slate-800 disabled:opacity-50"
                     >
@@ -246,11 +329,47 @@ export default function ContractViewer({
           </div>
         ) : (
           <div className="w-full h-full flex flex-col relative bg-slate-200">
-            {/* IFRAME: Only render if we have a VALID PROXY URL */}
-            {proxySrc ? (
-              <iframe key={iframeKey} src={proxySrc} className="w-full h-full border-none bg-white relative z-10" title="Contract PDF"/>
+            {/* 1. LOADING STATE */}
+            {isLoadingPdf && (
+               <div className="absolute inset-0 flex flex-col items-center justify-center bg-white z-20">
+                  <Loader2 className="animate-spin text-slate-400 mb-2" size={32}/>
+                  <p className="text-sm text-slate-500 font-medium">Loading Secure PDF...</p>
+               </div>
+            )}
+
+            {/* 2. ERROR STATE */}
+            {!isLoadingPdf && pdfError && (
+               <div className="absolute inset-0 flex flex-col items-center justify-center bg-white z-20 text-center p-8">
+                  <div className="p-3 bg-red-50 text-red-500 rounded-full mb-4"><AlertTriangle size={32}/></div>
+                  <h3 className="text-lg font-bold text-slate-800">Access Denied</h3>
+                  <p className="text-sm text-slate-500 mt-2 mb-6 max-w-xs">{pdfError}</p>
+                  <div className="flex gap-3">
+                    <button onClick={() => setIsEditing(true)} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-bold hover:bg-slate-200">Select Different File</button>
+                    {/* Retry Button Updated */}
+                    <button 
+                        onClick={() => { 
+                            setBlobUrl(null); 
+                            setPdfError(null);
+                            setIsEditing(false); 
+                            setRefreshTrigger(prev => prev + 1);
+                        }} 
+                        className="px-4 py-2 bg-slate-900 text-white rounded-lg text-sm font-bold flex items-center gap-2"
+                    >
+                        <RefreshCw size={14} /> Retry
+                    </button>
+                  </div>
+               </div>
+            )}
+
+            {/* 3. SUCCESS STATE (IFRAME) */}
+            {!isLoadingPdf && !pdfError && blobUrl ? (
+               <iframe 
+                 src={blobUrl} 
+                 className="w-full h-full border-none bg-white relative z-10" 
+                 title="Contract PDF"
+               />
             ) : (
-              <div className="flex-1 flex items-center justify-center text-slate-400"><p>No Contract Attached</p></div>
+               !isLoadingPdf && !pdfError && <div className="flex-1 flex items-center justify-center text-slate-400"><p>No Contract Attached</p></div>
             )}
           </div>
         )}

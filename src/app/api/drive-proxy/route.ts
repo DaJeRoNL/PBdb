@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import { createServerClient } from '@supabase/ssr';
+import { createClient } from '@supabase/supabase-js'; // Added for header-based auth
 import { cookies } from 'next/headers';
 
 // Force dynamic to prevent static generation issues
@@ -16,38 +17,66 @@ export async function GET(req: NextRequest) {
 
   try {
     // --- 1. SECURITY & AUTHENTICATION ---
-    const cookieStore = await cookies();
     
-    // Create an authenticated Supabase client using the request cookies
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll();
+    let supabase;
+    let user;
+    let authError;
+
+    // Check if the client is sending an explicit Authorization header (used in retries)
+    const authHeader = req.headers.get('Authorization');
+
+    if (authHeader) {
+      // PATH A: Header-based Auth (Fixes the Stale Token Loop)
+      // We create a standard client that forces the fresh Authorization header
+      supabase = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        { global: { headers: { Authorization: authHeader } } }
+      );
+
+      const { data, error } = await supabase.auth.getUser();
+      user = data.user;
+      authError = error;
+
+    } else {
+      // PATH B: Cookie-based Auth (Standard initial load)
+      const cookieStore = await cookies();
+      
+      supabase = createServerClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        {
+          cookies: {
+            getAll() {
+              return cookieStore.getAll();
+            },
+            setAll(cookiesToSet) {
+              try {
+                cookiesToSet.forEach(({ name, value, options }) =>
+                  cookieStore.set(name, value, options)
+                );
+              } catch {
+                // The `setAll` method was called from a Server Component.
+                // This can be ignored as this route is read-only.
+              }
+            },
           },
-          setAll(cookiesToSet) {
-            try {
-              cookiesToSet.forEach(({ name, value, options }) =>
-                cookieStore.set(name, value, options)
-              )
-            } catch {
-              // The `setAll` method was called from a Server Component.
-              // This can be ignored as this route is read-only.
-            }
-          },
-        },
-      }
-    );
+        }
+      );
+
+      const { data, error } = await supabase.auth.getUser();
+      user = data.user;
+      authError = error;
+    }
 
     // A. Check if user is logged in
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
     if (authError || !user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     // B. Fetch User Profile to determine Role
+    // The 'supabase' client instance created above already holds the correct 
+    // auth context (Cookie or Header), so RLS policies on 'profiles' will work.
     const { data: profile } = await supabase
       .from('profiles')
       .select('role, client_id')
@@ -126,7 +155,7 @@ export async function GET(req: NextRequest) {
     });
 
     // LOG SUCCESSFUL ACCESS
-    // Note: Use .rpc() to call the secure function we just made
+    // Note: Use .rpc() to call the secure function
     await supabase.rpc('log_security_event', {
       p_event_type: 'contract_view',
       p_user_id: user.id,
@@ -145,7 +174,7 @@ export async function GET(req: NextRequest) {
 
   } catch (error: any) {
     // Secure error logging (do not expose stack trace to client)
-    console.error('Secure Drive Proxy Error'); 
+    console.error('Secure Drive Proxy Error', error); // Added error object for server logs
     
     if (error.code === 403) return NextResponse.json({ error: 'Upstream Permission Denied' }, { status: 403 });
     if (error.code === 404) return NextResponse.json({ error: 'File not found' }, { status: 404 });

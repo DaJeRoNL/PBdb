@@ -13,7 +13,6 @@ import {
 import Link from "next/link";
 import ContractViewer from "@/components/ContractViewer";
 import { generateAccountReport } from "@/lib/reportGenerator"; 
-import { z } from "zod";
 
 // --- TYPES ---
 type Tab = 'overview' | 'commercials' | 'team' | 'notes';
@@ -28,11 +27,6 @@ type Product = {
   deposit_date: string;
   deposit_paid: boolean;
 };
-
-const NoteSchema = z.string()
-  .min(1, "Note cannot be empty")
-  .max(1000, "Note is too long")
-  .refine(s => !/[<>]/g.test(s), "HTML tags are not allowed");
 
 // REQUIRED FIELDS FOR HEALTHY SETUP
 const REQUIRED_COMMERCIALS = ['billing_contact_email', 'tax_id', 'payment_terms'];
@@ -422,28 +416,12 @@ export default function AccountsDashboard() {
   };
 
   const handleAddNote = async () => {
-    // 1. Validate Input
-    const result = NoteSchema.safeParse(newNote);
-    if (!result.success) {
-      alert(result.error.issues[0].message); // Simple alert for now
-      return;
-    }
-
-    // 2. Proceed with valid data
-    const cleanNote = result.data;
-
+    if (!newNote.trim()) return;
     const { error } = await supabase.from('account_internal_notes').insert([{
-      client_id: selectedAccount.id, author_id: currentUser.id, content: cleanNote
+      client_id: selectedAccount.id, author_id: currentUser.id, content: newNote
     }]);
-    
     await supabase.from('clients').update({ last_interaction_at: new Date().toISOString() }).eq('id', selectedAccount.id);
-    
-    if (!error) { 
-      setNewNote(""); 
-      fetchNotes(selectedAccount.id); 
-    } else {
-      alert("Failed to save note");
-    }
+    if (!error) { setNewNote(""); fetchNotes(selectedAccount.id); }
   };
 
   const handleDeleteNote = async (noteId: string) => {
