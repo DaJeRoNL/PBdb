@@ -7,6 +7,44 @@ import {
   Filter, LayoutGrid, DollarSign, Globe, MapPin, X, ArrowUpRight, Search, 
   Archive, Activity, Megaphone, Plus, Target, Trash2, Layers, Calendar, BarChart3, Timer, ChevronDown, Clock
 } from "lucide-react";
+import { z } from "zod";
+
+// SCHEMAS
+const BulkLineSchema = z.string()
+  .trim()
+  .min(1)
+  .refine(s => !/[<>]/g.test(s), "HTML tags detected") // Block scripts
+  .refine(s => s.startsWith('http'), "Must be a valid link (http/https)"); // Optional: Enforce URL format
+
+const CampaignSchema = z.object({
+  name: z.string().min(1, "Name is required").max(100).refine(s => !/[<>]/g.test(s), "No HTML tags"),
+  description: z.string().max(500).optional(),
+  goal_value: z.number().min(0),
+  theme_color: z.string(),
+  start_date: z.string().optional().or(z.literal('')),
+  end_date: z.string().optional().or(z.literal(''))
+});
+
+const LeadSchema = z.object({
+  lead_name: z.string().min(1, "Name is required").max(100).refine(s => !/[<>]/g.test(s), "No HTML tags"),
+  company_name: z.string().min(1, "Company is required").max(100).refine(s => !/[<>]/g.test(s), "No HTML tags"),
+  email: z.string().email("Invalid email").optional().or(z.literal('')),
+  phone: z.string().max(20).optional().or(z.literal('')),
+  linkedin: z.string().url("Must be a valid URL").optional().or(z.literal('')),
+  website: z.string().url("Must be a valid URL").optional().or(z.literal('')),
+  value: z.number().min(0),
+  status: z.string(),
+  stage: z.string(),
+  notes: z.string().max(2000).refine(s => !/[<>]/g.test(s), "No HTML tags in notes"),
+  // Pass-through other fields that don't need strict validation or are handled by select menus
+  lead_role: z.string().optional(),
+  industry: z.string().optional(),
+  title: z.string().optional(),
+  vertical: z.string().optional(),
+  address: z.string().optional(),
+  source: z.string().optional(),
+  campaign_id: z.string().optional().or(z.literal(''))
+});
 
 // --- TYPES ---
 type Campaign = {
@@ -232,8 +270,20 @@ export default function LeadsPage() {
   };
 
   const createCampaign = async () => {
-    if (!campaignForm.name) return addToast("Campaign name required", 'error');
-    const { error } = await supabase.from('campaigns').insert([{ ...campaignForm, status: 'Running' }]);
+    // 1. Validate
+    const result = CampaignSchema.safeParse(campaignForm);
+    
+    if (!result.success) {
+      addToast(result.error.issues[0].message, 'error');
+      return;
+    }
+
+    // 2. Submit Secure Data
+    const { error } = await supabase.from('campaigns').insert([{ 
+      ...result.data, // Use sanitized data
+      status: 'Running' 
+    }]);
+
     if (!error) {
       addToast("Campaign created");
       setShowCampaignModal(false);
@@ -376,26 +426,46 @@ export default function LeadsPage() {
 
   // --- LEAD LOGIC ---
   const handleManualSubmit = async () => {
-    if (!formData.lead_name || !formData.company_name) return addToast("Required fields missing", "error");
+    // 1. Validate Form Data
+    const result = LeadSchema.safeParse(formData);
+    
+    if (!result.success) {
+      addToast(result.error.issues[0].message, "error");
+      return;
+    }
+
     setIsSubmitting(true);
-    const payload: any = { ...formData, last_contacted_at: new Date().toISOString() };
+    const validData = result.data; // Sanitzed data
+
+    // Prepare Payload
+    const payload: any = { 
+      ...validData, 
+      last_contacted_at: new Date().toISOString() 
+    };
+
+    // Auto-assign campaign if new
     if (!editingId && !payload.campaign_id) {
       const active = campaigns.find(c => c.is_active);
       if (active) payload.campaign_id = active.id;
     }
-    if (formData.status === 'Closed Won') payload.won_at = new Date().toISOString();
+    
+    if (validData.status === 'Closed Won') payload.won_at = new Date().toISOString();
 
     if (editingId) {
       const { error } = await supabase.from('opportunities').update(payload).eq('id', editingId);
       if (!error) {
         addToast("Updated successfully");
         logAction(editingId, "Manual update");
+      } else {
+        addToast(error.message, "error");
       }
     } else {
       const { data, error } = await supabase.from('opportunities').insert([payload]).select().single();
       if (!error && data) {
         addToast("Lead created");
-        logAction(data.id, `Created: ${payload.lead_name}`);
+        logAction(data.id, `Created: ${validData.lead_name}`);
+      } else if (error) {
+        addToast(error.message, "error");
       }
     }
     setIsSubmitting(false);
@@ -403,29 +473,54 @@ export default function LeadsPage() {
     fetchLeads();
   };
 
+  // --- SECURE REPLACEMENT FOR handleBulkImport ---
   const handleBulkImport = async () => {
     if (!importLinks.trim()) return;
     setIsSubmitting(true);
+    
     const active = campaigns.find(c => c.is_active);
-    const newLeads = importLinks.split(/\r?\n/).filter(l => l.trim()).map(link => ({
-      ...initialFormState,
-      lead_name: "Pending Scrape...",
-      company_name: "Pending...",
-      stage: "Scraping Queue",
-      notes: "Auto-imported",
-      linkedin: link.trim(),
-      title: "Quick Import",
-      vertical: "General",
-      last_contacted_at: new Date().toISOString(),
-      campaign_id: active?.id || null
-    }));
-    const { data, error } = await supabase.from('opportunities').insert(newLeads).select();
-    if (!error && data) {
-      addToast(`Imported ${data.length} leads`);
-      data.forEach(l => logAction(l.id, "Bulk Imported"));
-      setShowImportModal(false);
-      setImportLinks("");
-      fetchLeads();
+    const rawLines = importLinks.split(/\r?\n/).filter(l => l.trim());
+    const validLeads: any[] = [];
+    const errors: string[] = [];
+
+    // Validate each line
+    rawLines.forEach((line, index) => {
+      const result = BulkLineSchema.safeParse(line);
+      if (result.success) {
+        validLeads.push({
+          ...initialFormState,
+          lead_name: "Pending Scrape...",
+          company_name: "Pending...",
+          stage: "Scraping Queue",
+          notes: "Auto-imported",
+          linkedin: result.data, // Secure Data
+          title: "Quick Import",
+          vertical: "General",
+          last_contacted_at: new Date().toISOString(),
+          campaign_id: active?.id || null
+        });
+      } else {
+        errors.push(`Line ${index + 1}: ${result.error.issues[0].message}`);
+      }
+    });
+
+    if (errors.length > 0) {
+      alert(`Import blocked due to errors:\n${errors.slice(0, 5).join('\n')}${errors.length > 5 ? '\n...' : ''}`);
+      setIsSubmitting(false);
+      return; 
+    }
+
+    if (validLeads.length > 0) {
+      const { data, error } = await supabase.from('opportunities').insert(validLeads).select();
+      if (!error && data) {
+        addToast(`Imported ${data.length} leads`);
+        data.forEach(l => logAction(l.id, "Bulk Imported"));
+        setShowImportModal(false);
+        setImportLinks("");
+        fetchLeads();
+      } else {
+        addToast("Database error during import", 'error');
+      }
     }
     setIsSubmitting(false);
   };

@@ -87,12 +87,13 @@ export default function ContractViewer({
         'https://www.googleapis.com/auth/drive.readonly'
     ];
 
-    const tokenClient = window.google.accounts.oauth2.initTokenClient({
+  const tokenClient = window.google.accounts.oauth2.initTokenClient({
         client_id: CLIENT_ID,
         scope: scope.join(' '),
         callback: async (response: any) => {
             if (response.error !== undefined) {
-                console.error("Token Error:", response);
+                // FIX: Removed sensitive response object logging
+                console.error("Google Auth Error: Authorization failed.");
                 setIsPickerLoading(false);
                 return;
             }
@@ -134,7 +135,8 @@ export default function ContractViewer({
                         body: JSON.stringify({ fileId, accessToken })
                     });
                 } catch (e) {
-                    console.error("Failed to grant permission", e);
+                    // FIX: Sanitized log
+                    console.warn("Permission grant skipped or failed silently.");
                 }
 
                 // 2. Set URL to the DRIVE URL first for reference

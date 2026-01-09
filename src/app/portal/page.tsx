@@ -9,6 +9,12 @@ import {
   Activity, Trash2, Settings, ChevronRight, Layout, BadgeCheck, PaintBucket,
   Sparkles, MousePointerClick, List
 } from "lucide-react";
+import { z } from "zod";
+
+const PortalNoteSchema = z.string()
+  .min(1, "Note cannot be empty")
+  .max(500, "Note limit exceeded (500 chars)")
+  .refine(s => !/[<>]/g.test(s), "Invalid characters detected.");
 
 // --- TYPES ---
 type Stage = 'Sourced' | 'Screening' | 'Interview' | 'Offer' | 'Hired';
@@ -110,6 +116,21 @@ export default function ClientPortal() {
         account_manager_name: clientRes.data.client_portal_settings?.account_manager_name || 'PlaceByte Team',
         account_manager_email: clientRes.data.client_portal_settings?.account_manager_email || 'team@placebyte.com'
       });
+
+      // --- SECURITY LOGGING START ---
+      // If this is an internal user viewing a different client, log it immediately.
+      if (internalUser && impersonateId) {
+        await supabase.rpc('log_security_event', {
+          p_event_type: 'impersonation_view',
+          p_user_id: session?.user.id,
+          p_metadata: { 
+            target_client_id: targetClientId, 
+            target_client_name: clientRes.data.name 
+          },
+          p_severity: 'warning'
+        });
+      }
+      // --- SECURITY LOGGING END ---
     }
     setCandidates(candsRes.data || []);
     setNotes(notesRes.data || []);
@@ -135,12 +156,34 @@ export default function ClientPortal() {
   };
 
   const handleAddNote = async () => {
-    if (!newNote.trim()) return;
-    if (notes.length >= 10 && !isInternal) return alert("Note limit reached.");
+    // 1. Security & Validation
+    const result = PortalNoteSchema.safeParse(newNote);
+    
+    if (!result.success) {
+      alert(result.error.issues[0].message);
+      return;
+    }
+
+    // 2. Limit Check (Existing logic preserved but clearer)
+    if (notes.length >= 10 && !isInternal) {
+      return alert("Note limit reached. Please contact support.");
+    }
+
+    // 3. Safe Insert
     const { error } = await supabase.from('portal_notes').insert([{
-      client_id: clientInfo.id, author_id: userProfile?.id, content: newNote, is_internal_only: false
+      client_id: clientInfo.id, 
+      author_id: userProfile?.id, 
+      content: result.data, // Use validated data
+      is_internal_only: false
     }]);
-    if (!error) { setNewNote(""); setShowNoteModal(false); loadPortal(); } else { alert("Error: " + error.message); }
+
+    if (!error) { 
+      setNewNote(""); 
+      setShowNoteModal(false); 
+      loadPortal(); 
+    } else { 
+      alert("Error: " + error.message); 
+    }
   };
 
   const handleDeleteNote = async (noteId: string) => {
