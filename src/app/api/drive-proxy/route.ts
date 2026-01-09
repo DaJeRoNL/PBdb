@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { google } from 'googleapis';
 
+// Force dynamic to prevent static generation issues with searchParams
+export const dynamic = 'force-dynamic';
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const fileId = searchParams.get('fileId');
@@ -16,7 +19,6 @@ export async function GET(req: NextRequest) {
       credentials: {
         client_email: process.env.GOOGLE_CLIENT_EMAIL,
         // Replace escaped newlines with actual newlines for the private key
-        // This is crucial because .env files often escape newlines as \\n
         private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
       },
       scopes: ['https://www.googleapis.com/auth/drive.readonly'],

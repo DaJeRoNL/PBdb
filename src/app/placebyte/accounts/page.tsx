@@ -7,10 +7,12 @@ import {
   Calendar, Shield, Search, Filter, Plus, LayoutDashboard,
   Clock, X, Activity, DollarSign, FileText, Lock, Unlock,
   MessageSquare, Save, Briefcase, CreditCard, Receipt, Hash,
-  Info, UserPlus, Trash2, Calculator, Percent, Wallet, Send
+  Info, UserPlus, Trash2, Calculator, Percent, Wallet, Send, Paperclip,
+  Printer 
 } from "lucide-react";
 import Link from "next/link";
-import ContractViewer from "@/components/ContractViewer"; // Import the new component
+import ContractViewer from "@/components/ContractViewer";
+import { generateAccountReport } from "@/lib/reportGenerator"; 
 
 // --- TYPES ---
 type Tab = 'overview' | 'commercials' | 'team' | 'notes';
@@ -32,6 +34,7 @@ const REQUIRED_OPS = ['project_deadline', 'owner_id'];
 const REQUIRED_FIELDS = [...REQUIRED_COMMERCIALS, ...REQUIRED_OPS];
 
 export default function AccountsDashboard() {
+  // ... (All existing state and effects remain the same) ...
   const [loading, setLoading] = useState(true);
   const [accounts, setAccounts] = useState<any[]>([]);
   const [filteredAccounts, setFilteredAccounts] = useState<any[]>([]);
@@ -39,27 +42,22 @@ export default function AccountsDashboard() {
   const [internalStaff, setInternalStaff] = useState<any[]>([]);
   const [currentUser, setCurrentUser] = useState<any>(null);
 
-  // Selection & UI State
   const [selectedAccount, setSelectedAccount] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<Tab>('overview');
   const [filterMode, setFilterMode] = useState<'all' | 'mine' | 'risk'>('all');
   const [searchQuery, setSearchQuery] = useState("");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   
-  // Contract Viewer State (New)
   const [isContractOpen, setIsContractOpen] = useState(false);
 
-  // Edit State
   const [editForm, setEditForm] = useState<any>({});
   const [products, setProducts] = useState<Product[]>([]);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [missingFields, setMissingFields] = useState<string[]>([]);
 
-  // Notes
   const [newNote, setNewNote] = useState("");
   const [notes, setNotes] = useState<any[]>([]);
   
-  // Calculated
   const [healthDetails, setHealthDetails] = useState<any>(null);
   const [initialState, setInitialState] = useState<string>("");
 
@@ -71,14 +69,12 @@ export default function AccountsDashboard() {
     applyFilters();
   }, [accounts, filterMode, searchQuery]);
 
-  // Dirty State Tracker & Live Calc
   useEffect(() => {
     if (selectedAccount) {
       const allRequired = [...REQUIRED_COMMERCIALS, ...REQUIRED_OPS];
       const missing = allRequired.filter(f => !editForm[f]);
       setMissingFields(missing);
 
-      // FIX: Live Recalc Total Value (Commission vs Fixed)
       const totalVal = products.reduce((acc, p) => {
         const price = Number(p.base_price) || 0;
         if (p.type === 'commission') {
@@ -88,23 +84,24 @@ export default function AccountsDashboard() {
         return acc + price;
       }, 0);
       
-      // Update local edit form with new total
       const updatedForm = { ...editForm, contract_value: totalVal };
       if (editForm.contract_value !== totalVal) {
           setEditForm(updatedForm);
       }
       
-      // Update health details live
-      const updatedAccount = { ...selectedAccount, ...updatedForm, commercial_products: products };
+      const updatedAccount = { 
+        ...selectedAccount, 
+        ...updatedForm, 
+        commercial_products: products,
+        candidates: selectedAccount.candidates || [] 
+      };
       setHealthDetails(calculateHealthScore(updatedAccount));
 
-      // Compare Current vs Initial
       const currentState = JSON.stringify({ form: editForm, products: products });
       setHasUnsavedChanges(currentState !== initialState);
     }
   }, [products, editForm, selectedAccount, initialState]);
 
-  // Prevent background scroll
   useEffect(() => {
     document.body.style.overflow = isSidebarOpen ? 'hidden' : 'unset';
     return () => { document.body.style.overflow = 'unset'; };
@@ -114,7 +111,6 @@ export default function AccountsDashboard() {
     setLoading(true);
     const { data: { session } } = await supabase.auth.getSession();
     setCurrentUser(session?.user);
-
     await Promise.all([fetchAccounts(), fetchOnboarding(), fetchStaff()]);
     setLoading(false);
   };
@@ -122,7 +118,12 @@ export default function AccountsDashboard() {
   const fetchAccounts = async () => {
     const { data } = await supabase
       .from('clients')
-      .select(`*, client_portal_settings (*), owner:profiles!owner_id(email)`)
+      .select(`
+        *, 
+        client_portal_settings (*), 
+        owner:profiles!owner_id(email),
+        candidates(id, stage)
+      `)
       .order('created_at', { ascending: false });
     
     const enriched = (data || []).map(c => {
@@ -154,7 +155,6 @@ export default function AccountsDashboard() {
     setNotes(data || []);
   };
 
-  // --- LOGIC: HEALTH SCORE ---
   const calculateHealthScore = (client: any) => {
     let score = 100;
     const reasons: string[] = [];
@@ -175,19 +175,110 @@ export default function AccountsDashboard() {
     const sourcingBudget = totalValue * budgetPercent;
     const hoursBudget = sourcingBudget / HOURLY_COST_BASIS;
 
-    if (totalValue === 0) { score -= 20; reasons.push("Zero Contract Value (-20)"); }
-    else if (hoursBudget < 10) { score -= 10; reasons.push("Low Budget <10h (-10)"); }
-    else { score += 5; reasons.push(`Healthy Budget (${Math.floor(hoursBudget)}h) (+5)`); }
+    if (totalValue === 0) { 
+        score -= 75; 
+        reasons.push("Zero Contract Value (-75)"); 
+    } else if (totalValue < 5000) {
+        score -= 10;
+        reasons.push("Low Value Account (-10)");
+    } else if (totalValue > 50000) {
+        score += 5;
+        reasons.push("High Value Account (+5)");
+    }
 
+    if (hoursBudget < 10 && totalValue > 0) { 
+        score -= 10; 
+        reasons.push("Low Sourcing Budget <10h (-10)"); 
+    }
+
+    if (client.last_interaction_at) {
+        const daysSinceInteraction = Math.floor((new Date().getTime() - new Date(client.last_interaction_at).getTime()) / (1000 * 3600 * 24));
+        if (daysSinceInteraction > 30) {
+            score -= 15;
+            reasons.push(`Inactive >30d (-15)`);
+        } else if (daysSinceInteraction > 14) {
+            score -= 5;
+            reasons.push(`Inactive >14d (-5)`);
+        } else {
+            score += 5;
+            reasons.push("Recently Active (+5)");
+        }
+    } else {
+        score -= 5;
+        reasons.push("No Recent Interaction (-5)");
+    }
+
+    if (!client.billing_contact_email) { score -= 10; reasons.push("No Billing Email (-10)"); }
+    if (!client.tax_id) { score -= 5; reasons.push("Missing Tax ID (-5)"); }
+    if (!client.contract_url) { score -= 5; reasons.push("No Contract File (-5)"); }
+    if (!client.owner_id) { score -= 10; reasons.push("Unassigned Owner (-10)"); }
+
+    const today = new Date().getTime();
+    let projectDuration = 0;
+    let timeElapsed = 0;
+    
     if (client.project_deadline) {
-      const daysLeft = Math.floor((new Date(client.project_deadline).getTime() - new Date().getTime()) / (1000 * 3600 * 24));
-      if (daysLeft < 0) { score -= 40; reasons.push("Overdue (-40)"); }
+      const deadlineDate = new Date(client.project_deadline).getTime();
+      const startDate = client.contract_start_date ? new Date(client.contract_start_date).getTime() : new Date(client.created_at).getTime(); 
+      
+      const daysLeft = Math.floor((deadlineDate - today) / (1000 * 3600 * 24));
+
+      if (daysLeft < 0) { score -= 40; reasons.push("Project Overdue (-40)"); }
       else if (daysLeft < 14) { score -= 10; reasons.push("Deadline < 2w (-10)"); }
+      else if (daysLeft > 60) { score += 5; reasons.push("Long Runway (>60d) (+5)"); }
+
+      projectDuration = deadlineDate - startDate;
+      timeElapsed = today - startDate;
     } else {
       score -= 5; reasons.push("No Deadline Set (-5)");
     }
 
-    return { score: Math.min(100, Math.max(0, score)), reason: reasons, hoursBudget: Math.floor(hoursBudget) };
+    if (client.payment_terms === 'Net 60' || client.payment_terms === 'Net 90') {
+        score -= 5;
+        reasons.push("Slow Payment Terms (-5)");
+    }
+
+    if (client.commercial_products && client.commercial_products.length > 0 && client.candidates) {
+        const totalPositions = client.commercial_products.length;
+        const hiredCount = client.candidates.filter((c: any) => c.stage === 'Hired').length;
+        const activeCount = client.candidates.filter((c: any) => ['Screening', 'Interview', 'Offer'].includes(c.stage)).length;
+        
+        if (totalPositions > hiredCount && activeCount === 0) {
+            score -= 15;
+            reasons.push("Stalled Pipeline (0 Active) (-15)");
+        }
+
+        if (projectDuration > 0 && timeElapsed > 0) {
+            const progressPercent = Math.min(1, Math.max(0, timeElapsed / projectDuration));
+            const hiringPercent = hiredCount / totalPositions;
+
+            if (progressPercent > 0.5 && hiringPercent < 0.5) {
+                const lagSeverity = (progressPercent - hiringPercent) * 20; 
+                const penalty = Math.ceil(lagSeverity);
+                if (penalty > 0) {
+                   score -= penalty;
+                   reasons.push(`Hiring Lag (${Math.round(hiringPercent*100)}% filled @ ${Math.round(progressPercent*100)}% time) (-${penalty})`);
+                }
+            }
+
+            if (progressPercent > 0.85 && hiringPercent < 1) {
+                score -= 20;
+                reasons.push("Critical: Roles open near deadline (-20)");
+            }
+        }
+    }
+
+    const finalScore = Math.max(1, Math.min(100, score));
+
+    const sortedReasons = reasons.sort((a, b) => {
+        const isAPositive = a.includes('+');
+        const isBPositive = b.includes('+');
+        if (isAPositive && !isBPositive) return -1;
+        if (!isAPositive && isBPositive) return 1;
+        return 0;
+    });
+
+    return { score: finalScore, reason: sortedReasons, hoursBudget: Math.floor(hoursBudget) };
   };
 
   const applyFilters = () => {
@@ -210,7 +301,6 @@ export default function AccountsDashboard() {
     const health = calculateHealthScore(account);
     setHealthDetails(health);
     
-    // Add contract_url to state
     const startForm = {
       ...account,
       owner_id: account.owner_id || currentUser?.id, 
@@ -229,7 +319,7 @@ export default function AccountsDashboard() {
       billing_address: account.billing_address || '',
       tax_id: account.tax_id || '',
       payment_terms: account.payment_terms || 'Net 30',
-      contract_url: account.contract_url || '' // New field
+      contract_url: account.contract_url || '' 
     };
 
     const startProducts = Array.isArray(account.commercial_products) ? account.commercial_products : [];
@@ -239,10 +329,9 @@ export default function AccountsDashboard() {
     setInitialState(JSON.stringify({ form: startForm, products: startProducts }));
     setHasUnsavedChanges(false);
     
-    // Reset Views
     fetchNotes(account.id);
     setIsSidebarOpen(true);
-    setIsContractOpen(false); // Start with contract closed
+    setIsContractOpen(false);
     setActiveTab('overview');
   };
 
@@ -252,7 +341,6 @@ export default function AccountsDashboard() {
     setSelectedAccount(null);
   }
 
-  // --- SAVE LOGIC ---
   const handleSaveChanges = async () => {
     if (!selectedAccount) return;
     
@@ -270,6 +358,7 @@ export default function AccountsDashboard() {
       client_portal_settings, owner,
       commercial_products,
       id, created_at,
+      candidates, 
       ...cleanForm 
     } = editForm;
 
@@ -326,7 +415,6 @@ export default function AccountsDashboard() {
     setProducts(updated);
   };
 
-  // --- NOTES LOGIC ---
   const handleAddNote = async () => {
     if (!newNote.trim()) return;
     const { error } = await supabase.from('account_internal_notes').insert([{
@@ -338,7 +426,6 @@ export default function AccountsDashboard() {
 
   const handleDeleteNote = async (noteId: string) => {
     if(!confirm("Delete this note?")) return;
-    
     const { error } = await supabase
       .from('account_internal_notes')
       .delete()
@@ -377,7 +464,6 @@ export default function AccountsDashboard() {
     }
   };
 
-  // --- HELPER: CALCULATE DISPLAY PRICE ---
   const getProductDisplayPrice = (p: Product) => {
     if (p.type === 'commission') {
       const pct = Number(p.commission_percent) || 0;
@@ -387,10 +473,49 @@ export default function AccountsDashboard() {
     return Number(p.base_price) || 0;
   };
 
+  const handleFocusSelect = (e: React.FocusEvent<HTMLInputElement>) => {
+    e.target.select();
+  };
+
+  // --- REPORT GENERATION ---
+  const handleGenerateReport = () => {
+    if (!selectedAccount) return;
+    if (!confirm("Generate PDF Report for this account? This will contain internal sensitive data.")) return;
+
+    // Pass detailed real data to generator
+    const reportData = {
+      accountName: selectedAccount.name,
+      domain: selectedAccount.domain || 'N/A',
+      healthScore: healthDetails?.score || 0,
+      contractValue: editForm.contract_value || 0,
+      products: products,
+      owner: internalStaff.find(s => s.id === editForm.owner_id)?.email || 'Unassigned',
+      billingEmail: editForm.billing_contact_email || 'N/A',
+      paymentTerms: editForm.payment_terms || 'N/A',
+      lastInteraction: selectedAccount.last_interaction_at || selectedAccount.created_at,
+      notes: notes,
+      taxId: editForm.tax_id || 'N/A', // New Field
+      taxPercentage: editForm.tax_percentage || 0, // New Field
+      startDate: editForm.contract_start_date || selectedAccount.created_at, // New Field
+      endDate: editForm.contract_end_date || null, // New Field
+      sourcingBudget: healthDetails?.hoursBudget || 0 // New Field
+    };
+
+    generateAccountReport(reportData);
+  };
+
   // --- REUSABLE FOOTER SAVE ---
-  // No longer "sticky", now a standard block at bottom of flex container
   const FooterSave = ({ hasChanges, onSave }: { hasChanges: boolean, onSave: () => void }) => (
-    <div className="flex-shrink-0 pt-6 border-t border-slate-200 bg-white p-6 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-20 flex justify-end">
+    <div className="flex-shrink-0 pt-6 border-t border-slate-200 bg-white p-6 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-20 flex justify-end sticky bottom-0">
+      {hasChanges && (
+        <div className="absolute bottom-20 right-6 animate-in slide-in-from-bottom-2 fade-in duration-300">
+           <div className="bg-slate-800 text-white text-xs py-2 px-3 rounded shadow-lg flex items-center gap-2">
+              <span className="w-2 h-2 bg-orange-500 rounded-full animate-pulse"></span>
+              You have unsaved changes
+           </div>
+        </div>
+      )}
+      
       <button
         onClick={onSave}
         className={`px-6 py-3 rounded-xl text-sm font-bold shadow-md transition-all flex items-center gap-2 text-white ${
@@ -519,7 +644,10 @@ export default function AccountsDashboard() {
                         </div>
                         <div>
                           <p className="font-bold text-slate-900 text-sm">{account.name}</p>
-                          <p className="text-xs text-slate-500">{account.domain}</p>
+                          <div className="flex items-center gap-2">
+                             <p className="text-xs text-slate-500">{account.domain}</p>
+                             {account.contract_url && <Paperclip size={12} className="text-blue-500"/>}
+                          </div>
                         </div>
                       </div>
                     </td>
@@ -593,6 +721,13 @@ export default function AccountsDashboard() {
                   </div>
                </div>
                <div className="flex items-center gap-3">
+                 <button 
+                    onClick={handleGenerateReport} 
+                    className="p-2 hover:bg-slate-200 rounded-lg text-slate-500 transition-colors"
+                    title="Generate Report"
+                 >
+                    <Printer size={20}/>
+                 </button>
                  <button 
                     onClick={() => setIsContractOpen(!isContractOpen)}
                     className={`px-3 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 border ${isContractOpen ? 'bg-blue-100 border-blue-200 text-blue-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}
@@ -738,19 +873,22 @@ export default function AccountsDashboard() {
                                {products.map((prod, idx) => (
                                  <div key={prod.id || idx} className={`p-4 bg-slate-50 border rounded-xl space-y-3 transition-colors ${!prod.id ? 'border-orange-200 bg-orange-50/30' : 'border-slate-200'}`}>
                                     <div className="grid grid-cols-12 gap-3 items-center">
-                                        <div className="col-span-4"><input type="text" className="w-full bg-transparent font-bold text-sm text-slate-900 outline-none border-b border-transparent focus:border-blue-400 placeholder:text-slate-400" value={prod.name} onChange={(e) => updateProduct(idx, 'name', e.target.value)} placeholder="Position Name" /></div>
+                                        <div className="col-span-4"><input type="text" className="w-full bg-transparent font-bold text-sm text-slate-900 outline-none border-b border-transparent focus:border-blue-400 placeholder:text-slate-400" value={prod.name} onChange={(e) => updateProduct(idx, 'name', e.target.value)} onFocus={handleFocusSelect} placeholder="Position Name" /></div>
                                         <div className="col-span-2"><select className="w-full bg-transparent text-xs uppercase font-bold text-slate-500 outline-none" value={prod.type} onChange={(e) => updateProduct(idx, 'type', e.target.value)}><option value="fixed">Fixed</option><option value="commission">Commission</option></select></div>
                                         <div className="col-span-3 text-right">
-                                           <span className="text-xs text-slate-400 mr-1">{prod.type === 'commission' ? 'Est. Val:' : 'Price:'}</span>
-                                           <input type="number" className="w-20 bg-transparent text-sm font-mono text-slate-700 text-right outline-none border-b border-transparent focus:border-blue-400" value={prod.base_price} onChange={(e) => updateProduct(idx, 'base_price', parseFloat(e.target.value) || 0)} />
+                                           <span className="text-xs text-slate-400 mr-1">{prod.type === 'commission' ? 'Placement Fee:' : 'Price:'}</span>
+                                           <input type="number" className="w-20 bg-transparent text-sm font-mono text-slate-700 text-right outline-none border-b border-transparent focus:border-blue-400" value={prod.base_price} onChange={(e) => updateProduct(idx, 'base_price', parseFloat(e.target.value) || 0)} onFocus={handleFocusSelect} />
                                         </div>
                                         <div className="col-span-2 text-right">
-                                           {prod.type === 'commission' && (
-                                             <div className="flex items-center justify-end gap-1">
-                                                <input type="number" className="w-10 bg-slate-200 text-xs px-1 rounded text-right" value={prod.commission_percent} onChange={(e) => updateProduct(idx, 'commission_percent', parseFloat(e.target.value) || 0)} />
-                                                <span className="text-xs text-slate-500">%</span>
+                                           {prod.type === 'commission' ? (
+                                             <div className="flex flex-col items-end gap-1">
+                                                <div className="flex items-center justify-end gap-1">
+                                                    <input type="number" className="w-10 bg-slate-200 text-xs px-1 rounded text-right" value={prod.commission_percent} onChange={(e) => updateProduct(idx, 'commission_percent', parseFloat(e.target.value) || 0)} onFocus={handleFocusSelect} />
+                                                    <span className="text-xs text-slate-500">%</span>
+                                                </div>
+                                                <span className="text-[10px] text-green-600 font-bold">${getProductDisplayPrice(prod).toLocaleString()}</span>
                                              </div>
-                                           )}
+                                           ) : null}
                                         </div>
                                         <div className="col-span-1 text-right"><button onClick={() => removeProduct(idx)} className="text-slate-400 hover:text-red-500"><Trash2 size={16}/></button></div>
                                     </div>
@@ -758,7 +896,7 @@ export default function AccountsDashboard() {
                                     <div className="flex items-center gap-3 pt-2 border-t border-slate-200/60">
                                        <div className="flex items-center gap-2 text-xs text-slate-500">
                                           <Wallet size={12}/>
-                                          Deposit: <input type="number" className="w-20 bg-slate-100 rounded px-1 text-right" value={prod.deposit_amount} onChange={(e) => updateProduct(idx, 'deposit_amount', parseFloat(e.target.value) || 0)} />
+                                          Deposit: <input type="number" className="w-20 bg-slate-100 rounded px-1 text-right" value={prod.deposit_amount} onChange={(e) => updateProduct(idx, 'deposit_amount', parseFloat(e.target.value) || 0)} onFocus={handleFocusSelect} />
                                        </div>
                                        <div className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${Number(prod.deposit_amount) >= Number(prod.base_price) && Number(prod.base_price) > 0 ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'}`}>
                                           {Number(prod.deposit_amount) >= Number(prod.base_price) && Number(prod.base_price) > 0 ? 'Fully Paid' : 'Partial'}
@@ -776,7 +914,7 @@ export default function AccountsDashboard() {
                                <div className="grid grid-cols-2 gap-4">
                                  <div>
                                     <label className="text-xs font-bold text-slate-500 block mb-1">Hourly Cost Basis ($)</label>
-                                    <input type="number" className="w-full p-3 border border-slate-300 rounded-xl text-sm" value={editForm.hourly_rate_estimate} onChange={e => setEditForm({...editForm, hourly_rate_estimate: parseFloat(e.target.value)})}/>
+                                    <input type="number" className="w-full p-3 border border-slate-300 rounded-xl text-sm" value={editForm.hourly_rate_estimate} onChange={e => setEditForm({...editForm, hourly_rate_estimate: parseFloat(e.target.value)})} onFocus={handleFocusSelect} />
                                  </div>
                                  <div>
                                     <label className="text-xs font-bold text-slate-500 block mb-1">Budget Rule (%)</label>
@@ -794,13 +932,13 @@ export default function AccountsDashboard() {
                                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2 flex items-center gap-2"><Receipt size={14}/> Billing & Tax</h4>
                                <div className={`p-3 rounded-xl border ${!editForm.billing_contact_email ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200'}`}>
                                   <label className="text-xs font-bold text-slate-500 block mb-1">Finance Email { !editForm.billing_contact_email && <span className="text-red-500">*</span> }</label>
-                                  <input type="email" className="w-full p-2 bg-white border border-slate-300 rounded-lg text-sm" value={editForm.billing_contact_email} onChange={e => setEditForm({...editForm, billing_contact_email: e.target.value})}/>
+                                  <input type="email" className="w-full p-2 bg-white border border-slate-300 rounded-lg text-sm" value={editForm.billing_contact_email} onChange={e => setEditForm({...editForm, billing_contact_email: e.target.value})} onFocus={handleFocusSelect}/>
                                </div>
                                <div className="grid grid-cols-2 gap-3">
-                                  <div><label className="text-xs font-bold text-slate-500 block mb-1">Tax ID { !editForm.tax_id && <span className="text-red-500">*</span> }</label><input type="text" className="w-full p-3 border border-slate-300 rounded-xl text-sm" value={editForm.tax_id} onChange={e => setEditForm({...editForm, tax_id: e.target.value})}/></div>
-                                  <div><label className="text-xs font-bold text-slate-500 block mb-1">Tax %</label><input type="number" className="w-full p-3 border border-slate-300 rounded-xl text-sm" value={editForm.tax_percentage} onChange={e => setEditForm({...editForm, tax_percentage: parseFloat(e.target.value)})}/></div>
+                                  <div><label className="text-xs font-bold text-slate-500 block mb-1">Tax ID { !editForm.tax_id && <span className="text-red-500">*</span> }</label><input type="text" className="w-full p-3 border border-slate-300 rounded-xl text-sm" value={editForm.tax_id} onChange={e => setEditForm({...editForm, tax_id: e.target.value})} onFocus={handleFocusSelect}/></div>
+                                  <div><label className="text-xs font-bold text-slate-500 block mb-1">Tax %</label><input type="number" className="w-full p-3 border border-slate-300 rounded-xl text-sm" value={editForm.tax_percentage} onChange={e => setEditForm({...editForm, tax_percentage: parseFloat(e.target.value)})} onFocus={handleFocusSelect}/></div>
                                </div>
-                               <div><label className="text-xs font-bold text-slate-500 block mb-1">Terms { !editForm.payment_terms && <span className="text-red-500">*</span> }</label><input type="text" className="w-full p-3 border border-slate-300 rounded-xl text-sm" value={editForm.payment_terms} onChange={e => setEditForm({...editForm, payment_terms: e.target.value})}/></div>
+                               <div><label className="text-xs font-bold text-slate-500 block mb-1">Terms { !editForm.payment_terms && <span className="text-red-500">*</span> }</label><input type="text" className="w-full p-3 border border-slate-300 rounded-xl text-sm" value={editForm.payment_terms} onChange={e => setEditForm({...editForm, payment_terms: e.target.value})} onFocus={handleFocusSelect}/></div>
                             </div>
                          </div>
                      </div>

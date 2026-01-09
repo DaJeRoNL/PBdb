@@ -35,7 +35,6 @@ export default function ContractViewer({
   const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_API_KEY;
   const CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
   const APP_ID = process.env.NEXT_PUBLIC_GOOGLE_APP_ID;
-  
   const DEFAULT_FOLDER_ID = "1igRV-Ulo-cvTtFAqS1Ag1Z57H_oyT1JF";
 
   useEffect(() => {
@@ -47,14 +46,14 @@ export default function ContractViewer({
     }
   }, [contractUrl, isOpen]);
 
-  // Load Google Scripts (GAPI + GIS)
+  // Load Google Scripts
   useEffect(() => {
     if (isOpen) {
         if (!window.gapi) {
           const gapiScript = document.createElement("script");
           gapiScript.src = "https://apis.google.com/js/api.js";
           gapiScript.onload = () => {
-              window.gapi.load('picker', () => { console.log("GAPI Picker Loaded"); });
+              window.gapi.load('picker', () => {});
           };
           document.body.appendChild(gapiScript);
         }
@@ -65,7 +64,6 @@ export default function ContractViewer({
           gisScript.async = true;
           gisScript.defer = true;
           gisScript.onload = () => {
-               console.log("GIS Loaded");
                setIsGoogleReady(true);
           };
           document.body.appendChild(gisScript);
@@ -75,75 +73,47 @@ export default function ContractViewer({
     }
   }, [isOpen]);
 
-  // Proxy Helper - This MUST return a /api/drive-proxy URL or empty string
-  const getProxyUrl = (url: string) => {
-    if (!url) return "";
-    
-    // If it's already a proxy URL, good.
-    if (url.startsWith('/api/drive-proxy')) return url;
-    if (url.includes('/api/drive-proxy')) return url; // robustness
-
-    let fileId = "";
-
-    // 1. Try standard Drive URL: /d/FILE_ID/view
-    const driveMatch = url.match(/\/d\/([-\w]{25,})/);
-    if (driveMatch && driveMatch[1]) {
-      fileId = driveMatch[1];
-    }
-
-    // 2. Try Picker URL: id=FILE_ID
-    if (!fileId) {
-      const queryMatch = url.match(/id=([-\w]{25,})/);
-      if (queryMatch && queryMatch[1]) {
-        fileId = queryMatch[1];
-      }
-    }
-
-    if (fileId) {
-        // Construct the proxy URL
-        return `/api/drive-proxy?fileId=${fileId}`;
-    }
-
-    console.warn("Could not extract File ID from URL:", url);
-    return ""; // Invalid for proxying
-  };
-
   // --- GOOGLE PICKER LOGIC ---
   const handleOpenPicker = () => {
     if (!isGoogleReady || !window.google || !window.google.accounts || !window.google.accounts.oauth2) {
-        alert("Google scripts not ready. Please wait.");
         return;
     }
 
     setIsPickerLoading(true);
-    const scope = ['https://www.googleapis.com/auth/drive.file'];
+    
+    // Request broader scope to find files
+    const scope = [
+        'https://www.googleapis.com/auth/drive.file',
+        'https://www.googleapis.com/auth/drive.readonly'
+    ];
 
     const tokenClient = window.google.accounts.oauth2.initTokenClient({
         client_id: CLIENT_ID,
         scope: scope.join(' '),
         callback: async (response: any) => {
             if (response.error !== undefined) {
-                console.error(response);
+                console.error("Token Error:", response);
                 setIsPickerLoading(false);
                 return;
             }
             createPicker(response.access_token);
         },
     });
-    tokenClient.requestAccessToken({ prompt: '' });
+    
+    tokenClient.requestAccessToken({ prompt: '' }); 
   };
 
   const createPicker = (accessToken: string) => {
     if (!window.gapi || !window.google || !window.google.picker) {
-        console.error("Picker API not loaded");
         setIsPickerLoading(false);
         return;
     }
 
     const view = new window.google.picker.DocsView(window.google.picker.ViewId.DOCS);
     view.setMimeTypes("application/pdf");
-    view.setParent(DEFAULT_FOLDER_ID);
+    view.setParent(DEFAULT_FOLDER_ID); 
     view.setIncludeFolders(true); 
+    view.setOwnedByMe(false);
 
     const picker = new window.google.picker.PickerBuilder()
         .addView(view)
@@ -167,14 +137,11 @@ export default function ContractViewer({
                     console.error("Failed to grant permission", e);
                 }
 
-                // 2. IMPORTANT: Generate the PROXY URL immediately for display
-                const proxyUrl = `/api/drive-proxy?fileId=${fileId}`;
+                // 2. Set URL to the DRIVE URL first for reference
+                onUpdateUrl(fileUrl);
+                setTempUrl(fileUrl);
 
-                // 3. Set the state
-                // We store the ORIGINAL url in the DB (for reference), but the UI uses the proxy
-                setTempUrl(fileUrl); // Keep the real URL in the input for reference
-                onUpdateUrl(fileUrl); // Update parent with real URL
-                
+                // 3. Switch to view mode
                 setIsEditing(false);
                 setTimeout(() => setIframeKey(prev => prev + 1), 500);
             }
@@ -183,9 +150,28 @@ export default function ContractViewer({
         .build();
     picker.setVisible(true);
   };
+  
+  const getProxyUrl = (url: string) => {
+    if (!url) return "";
+    if (url.startsWith('/api/drive-proxy')) return url;
+
+    // Standard Drive URL
+    const idRegex = /\/d\/([-\w]{25,})/;
+    const match = url.match(idRegex);
+    if (match && match[1]) {
+      return `/api/drive-proxy?fileId=${match[1]}`;
+    }
+    
+    // Picker URL format
+    const queryId = url.match(/id=([-\w]{25,})/);
+    if (queryId && queryId[1]) {
+        return `/api/drive-proxy?fileId=${queryId[1]}`;
+    }
+    return "";
+  };
 
   if (!isOpen) return null;
-  const proxySrc = getProxyUrl(contractUrl || "");
+  const proxySrc = contractUrl ? getProxyUrl(contractUrl) : "";
 
   return (
     <div 
@@ -211,7 +197,6 @@ export default function ContractViewer({
       </div>
 
       <div className="flex-1 bg-slate-200 overflow-hidden relative group">
-        
         {/* EDIT MODE */}
         {isEditing ? (
           <div className="absolute inset-0 flex items-center justify-center p-8 bg-slate-50/95 backdrop-blur-sm z-50">
@@ -221,6 +206,7 @@ export default function ContractViewer({
               <p className="text-sm text-slate-500 mb-6">Choose a file from Google Drive or paste a link.</p>
               
               <div className="space-y-4">
+                 {/* GOOGLE PICKER BUTTON */}
                  <button 
                     onClick={handleOpenPicker}
                     disabled={isPickerLoading || !isGoogleReady}
@@ -260,19 +246,9 @@ export default function ContractViewer({
           <div className="w-full h-full flex flex-col relative bg-slate-200">
             {/* IFRAME: Only render if we have a VALID PROXY URL */}
             {proxySrc ? (
-              <iframe 
-                key={iframeKey} 
-                src={proxySrc} 
-                className="w-full h-full border-none bg-white relative z-10" 
-                title="Contract PDF"
-              />
+              <iframe key={iframeKey} src={proxySrc} className="w-full h-full border-none bg-white relative z-10" title="Contract PDF"/>
             ) : (
-              <div className="flex-1 flex flex-col items-center justify-center text-slate-400 space-y-2">
-                 <Lock size={32} />
-                 <p className="text-sm font-medium">Unable to load document preview.</p>
-                 <p className="text-xs">Ensure the link is a valid Google Drive file.</p>
-                 <button onClick={() => setIsEditing(true)} className="mt-4 text-blue-600 hover:underline text-sm">Select different file</button>
-              </div>
+              <div className="flex-1 flex items-center justify-center text-slate-400"><p>No Contract Attached</p></div>
             )}
           </div>
         )}

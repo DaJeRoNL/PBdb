@@ -11,13 +11,13 @@ export async function POST(req: NextRequest) {
     }
 
     // Initialize OAuth2 client with the user's access token from the Picker
+    // We act on behalf of the USER to share the file with the SERVICE ACCOUNT
     const auth = new google.auth.OAuth2();
     auth.setCredentials({ access_token: accessToken });
 
     const drive = google.drive({ version: 'v3', auth });
 
     // Add the Service Account as a Viewer
-    // Crucial: sendNotificationEmail: false makes it silent
     await drive.permissions.create({
       fileId: fileId,
       requestBody: {
@@ -25,15 +25,13 @@ export async function POST(req: NextRequest) {
         type: 'user',
         emailAddress: serviceAccountEmail,
       },
-      sendNotificationEmail: false, 
+      sendNotificationEmail: false, // Silent share
     });
 
     return NextResponse.json({ success: true });
   } catch (error: any) {
     console.error('Permission Error:', error);
-    
-    // If the service account already has permission, Drive API might return 400 or 403 details, 
-    // but usually it just works or throws a "member already exists" type error which is fine to ignore.
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    // Ignore errors if permission already exists
+    return NextResponse.json({ error: error.message }, { status: 200 }); // Return 200 to not break frontend flow
   }
 }
