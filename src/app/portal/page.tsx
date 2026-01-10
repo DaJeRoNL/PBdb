@@ -1,20 +1,13 @@
-import dynamic from 'next/dynamic';
+import { Suspense } from "react";
+import PortalDashboard from "@/components/PortalDashboard";
 import PortalLoading from "@/components/PortalLoading";
 
-export const dynamicParams = true; 
-
-const PortalDashboard = dynamic(
-  () => import('@/components/PortalDashboard'),
-  { 
-    ssr: false, 
-    loading: () => <PortalLoading /> 
-  }
-);
+export const dynamic = "force-dynamic";
 
 export default function PortalPage() {
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-900">
+    <Suspense fallback={<PortalLoading />}>
       <PortalDashboard />
-    </div>
+    </Suspense>
   );
 }
