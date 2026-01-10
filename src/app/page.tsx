@@ -361,7 +361,7 @@ export default function Home() {
               </div>
               <p className="text-3xl font-extrabold text-gray-900 mb-1">{stats.leads}</p>
               <p className="text-xs text-gray-500 mb-4">Active opportunities</p>
-              <Link href="/placebyte" className="text-sm font-semibold text-blue-600 flex items-center gap-1 hover:gap-2 transition-all">
+              <Link href="/placebyte/leads" className="text-sm font-semibold text-blue-600 flex items-center gap-1 hover:gap-2 transition-all">
                 Go to Pipeline <ArrowRight size={14}/>
               </Link>
            </div>
@@ -442,7 +442,7 @@ export default function Home() {
               <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
                  <h3 className="font-bold text-gray-800 mb-4 text-sm uppercase tracking-wider">Quick Actions</h3>
                  <div className="space-y-3">
-                    <Link href="/placebyte" className="flex items-center gap-3 p-3 rounded-lg border border-gray-100 hover:border-blue-200 hover:bg-blue-50 transition-all group">
+                    <Link href="/placebyte/leads" className="flex items-center gap-3 p-3 rounded-lg border border-gray-100 hover:border-blue-200 hover:bg-blue-50 transition-all group">
                        <div className="h-8 w-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center group-hover:scale-110 transition-transform"><Plus size={16}/></div>
                        <span className="text-sm font-medium text-gray-700 group-hover:text-blue-700">Add New Lead</span>
                     </Link>
