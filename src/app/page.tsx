@@ -262,7 +262,7 @@ export default function Home() {
             </p>
             <div className="bg-gray-50 p-4 rounded-xl mb-6 text-left border border-gray-100">
                <p className="text-xs font-bold text-gray-500 uppercase mb-1">Action Required</p>
-               <p className="text-sm text-gray-700">Contact administrator to add your email to the <code>profiles</code> table.</p>
+               <p className="text-sm text-gray-700">Contact administrator to add your email.</p>
             </div>
             <button
               onClick={handleLogout}
