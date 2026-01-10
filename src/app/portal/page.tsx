@@ -1,5 +1,6 @@
 "use client";
-export const dynamic = 'force-dynamic';
+export const dynamic = "force-dynamic"; // 👈 THIS IS THE CRITICAL MISSING FIX
+
 import { useEffect, useState, Suspense } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useSearchParams } from "next/navigation";
@@ -458,8 +459,8 @@ function PortalContent() {
                       </div>
                       
                       <div className={`mt-4 pt-3 border-t flex justify-between items-center text-[10px] opacity-40 group-hover:opacity-70 transition-opacity ${isDark ? 'border-slate-800' : 'border-slate-100'}`}>
-                         <span className="flex items-center gap-1"><Clock size={10}/> 2d ago</span>
-                         <ChevronRight size={12}/>
+                          <span className="flex items-center gap-1"><Clock size={10}/> 2d ago</span>
+                          <ChevronRight size={12}/>
                       </div>
                     </div>
                   ))}
