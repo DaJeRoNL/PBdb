@@ -1,6 +1,5 @@
 "use client";
-export const dynamic = 'force-dynamic';
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useSearchParams } from "next/navigation";
 import PortalLoading from "@/components/PortalLoading";
@@ -23,15 +22,15 @@ const STAGES: Stage[] = ['Sourced', 'Screening', 'Interview', 'Offer', 'Hired'];
 
 // --- PALETTES (Earthy/Pastel Backgrounds) ---
 const PALETTES = [
-  { name: 'Corporate Blue', color: '#2563eb', bgPage: 'bg-[#F2F4F7]' }, // Cool Light Grey/Blue
-  { name: 'Emerald Growth', color: '#059669', bgPage: 'bg-[#F4F5F2]' }, // Sage/Stone
-  { name: 'Royal Purple', color: '#7c3aed', bgPage: 'bg-[#F5F3F7]' }, // Misty Lavender
-  { name: 'Crimson Bold', color: '#dc2626', bgPage: 'bg-[#F8F2F2]' }, // Warm Rose White
-  { name: 'Slate Minimal', color: '#475569', bgPage: 'bg-[#F5F5F5]' }, // Pure Cloud
-  { name: 'Midnight', color: '#0f172a', bgPage: 'bg-[#EBECF0]' }, // Steel Mist
+  { name: 'Corporate Blue', color: '#2563eb', bgPage: 'bg-[#F2F4F7]' },
+  { name: 'Emerald Growth', color: '#059669', bgPage: 'bg-[#F4F5F2]' },
+  { name: 'Royal Purple', color: '#7c3aed', bgPage: 'bg-[#F5F3F7]' },
+  { name: 'Crimson Bold', color: '#dc2626', bgPage: 'bg-[#F8F2F2]' },
+  { name: 'Slate Minimal', color: '#475569', bgPage: 'bg-[#F5F5F5]' },
+  { name: 'Midnight', color: '#0f172a', bgPage: 'bg-[#EBECF0]' },
 ];
 
-export default function ClientPortal() {
+function PortalContent() {
   const [loading, setLoading] = useState(true);
   const [clientInfo, setClientInfo] = useState<any>(null);
   const [candidates, setCandidates] = useState<any[]>([]);
@@ -51,7 +50,7 @@ export default function ClientPortal() {
   const [selectedCandidate, setSelectedCandidate] = useState<any>(null);
   const [showNoteModal, setShowNoteModal] = useState(false);
 
-  // Impersonation
+  // Impersonation - NOW INSIDE SUSPENSE BOUNDARY
   const searchParams = useSearchParams();
   const impersonateId = searchParams.get('impersonate');
   const [isInternal, setIsInternal] = useState(false);
@@ -88,7 +87,6 @@ export default function ClientPortal() {
   const loadPortal = async () => {
     const { data: { session } } = await supabase.auth.getSession();
     
-    // Get Current User Profile
     const { data: profile } = await supabase.from('profiles').select('*').eq('id', session?.user?.id).single();
     setUserProfile(profile);
 
@@ -118,8 +116,7 @@ export default function ClientPortal() {
         account_manager_email: clientRes.data.client_portal_settings?.account_manager_email || 'team@placebyte.com'
       });
 
-      // --- SECURITY LOGGING START ---
-      // If this is an internal user viewing a different client, log it immediately.
+      // SECURITY LOGGING
       if (internalUser && impersonateId) {
         await supabase.rpc('log_security_event', {
           p_event_type: 'impersonation_view',
@@ -131,7 +128,6 @@ export default function ClientPortal() {
           p_severity: 'warning'
         });
       }
-      // --- SECURITY LOGGING END ---
     }
     setCandidates(candsRes.data || []);
     setNotes(notesRes.data || []);
@@ -157,7 +153,6 @@ export default function ClientPortal() {
   };
 
   const handleAddNote = async () => {
-    // 1. Security & Validation
     const result = PortalNoteSchema.safeParse(newNote);
     
     if (!result.success) {
@@ -165,16 +160,14 @@ export default function ClientPortal() {
       return;
     }
 
-    // 2. Limit Check (Existing logic preserved but clearer)
     if (notes.length >= 10 && !isInternal) {
       return alert("Note limit reached. Please contact support.");
     }
 
-    // 3. Safe Insert
     const { error } = await supabase.from('portal_notes').insert([{
       client_id: clientInfo.id, 
       author_id: userProfile?.id, 
-      content: result.data, // Use validated data
+      content: result.data,
       is_internal_only: false
     }]);
 
@@ -211,7 +204,6 @@ export default function ClientPortal() {
   const currentPalette = PALETTES.find(p => p.color === primaryColor) || PALETTES[0];
   const isDark = themeMode === 'dark';
   
-  // Design Tokens
   const bgColor = isDark ? 'bg-slate-950' : currentPalette.bgPage;
   const textColor = isDark ? 'text-slate-100' : 'text-slate-900';
   const cardBg = isDark ? 'bg-slate-900' : 'bg-white';
@@ -229,7 +221,6 @@ export default function ClientPortal() {
     avgTime: '18d' 
   };
 
-  // Sticky Offsets (Exact Pixel Matching)
   const layoutHeaderHeight = "65px"; 
   const bannerHeight = "48px"; 
   
@@ -264,7 +255,6 @@ export default function ClientPortal() {
           <div className="flex justify-between items-center">
             
             <div className="flex items-center gap-5">
-              {/* COMPANY LETTER ICON */}
               <div 
                 style={{ backgroundColor: primaryColor }} 
                 className="w-10 h-10 rounded-xl flex items-center justify-center shadow-sm text-white font-bold text-lg"
@@ -285,7 +275,6 @@ export default function ClientPortal() {
             </div>
             
             <div className="flex items-center gap-4 md:gap-6">
-              {/* Account Manager Pill */}
               <div className={`hidden md:flex items-center gap-3 px-3 py-1.5 rounded-full border transition-all ${isDark ? 'border-slate-800 bg-slate-900/50' : 'border-slate-200 bg-white/60'}`}>
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center bg-gradient-to-br ${isDark ? 'from-slate-700 to-slate-800' : 'from-slate-100 to-slate-200'}`}>
                    <User size={14} className="opacity-60"/>
@@ -298,7 +287,6 @@ export default function ClientPortal() {
                 </div>
               </div>
 
-              {/* Theme Toggle */}
               <button 
                 onClick={toggleTheme}
                 className={`p-2.5 rounded-full transition-all duration-200 active:scale-95 ${isDark ? 'bg-slate-800 hover:bg-slate-700 text-yellow-400' : 'bg-white hover:bg-slate-100 text-slate-600 shadow-sm border border-slate-200'}`}
@@ -333,7 +321,7 @@ export default function ClientPortal() {
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
           
-          {/* LEFT: SCOPE (4 cols) */}
+          {/* LEFT: SCOPE */}
           <div className={`lg:col-span-4 p-6 rounded-2xl shadow-sm ${cardColor}`}>
             <h3 className="font-bold text-base mb-6 flex items-center gap-2">Project Scope</h3>
             <div className={`space-y-6 text-sm ${isDark ? 'text-gray-400' : 'text-gray-600'}`}>
@@ -341,7 +329,6 @@ export default function ClientPortal() {
                 {portalSettings?.scope_description}
               </p>
               
-              {/* Active Positions List */}
               {clientInfo?.commercial_products && clientInfo.commercial_products.length > 0 && (
                 <div className="pt-6 border-t border-dashed border-current opacity-50">
                   <h4 className="text-[10px] font-bold uppercase tracking-widest mb-3 flex items-center gap-2">
@@ -373,7 +360,7 @@ export default function ClientPortal() {
             </div>
           </div>
 
-          {/* RIGHT: TEAM NOTES (8 cols) */}
+          {/* RIGHT: TEAM NOTES */}
           <div className={`lg:col-span-8 p-6 rounded-2xl shadow-sm flex flex-col ${cardColor}`}>
             <div className="flex justify-between items-center mb-6">
               <h3 className="font-bold text-base flex items-center gap-2">Updates</h3>
@@ -406,7 +393,6 @@ export default function ClientPortal() {
                     <div className="flex items-center gap-3">
                       <span className="text-[10px] font-medium opacity-30">{new Date(note.created_at).toLocaleDateString()}</span>
                       
-                      {/* Destructive Action */}
                       <button 
                         onClick={() => handleDeleteNote(note.id)} 
                         className="flex items-center gap-1.5 text-red-500 bg-transparent hover:bg-red-50 dark:hover:bg-red-900/20 py-1 px-1.5 rounded transition-all opacity-0 group-hover/note:opacity-100"
@@ -422,7 +408,7 @@ export default function ClientPortal() {
           </div>
         </div>
 
-        {/* --- PIPELINE BOARD --- */}
+        {/* PIPELINE BOARD */}
         <div>
           <div className="mb-8 flex items-center gap-4">
              <div className="h-px w-8 bg-current opacity-10"></div>
@@ -447,7 +433,6 @@ export default function ClientPortal() {
                       onClick={() => { setSelectedCandidate(candidate); loadTimeline(candidate.id); }}
                       className={`p-5 rounded-xl border cursor-pointer transition-all hover:shadow-md group relative ${cardColor} hover:border-slate-300 dark:hover:border-slate-600`}
                     >
-                      {/* Left Accent Bar */}
                       <div className="absolute left-0 top-4 bottom-4 w-1 rounded-r-full opacity-0 group-hover:opacity-100 transition-opacity" style={{ backgroundColor: primaryColor }}></div>
 
                       <div className="flex justify-between items-start mb-3 pl-2">
@@ -462,7 +447,6 @@ export default function ClientPortal() {
                       </div>
                       
                       <div className="pl-2">
-                        {/* Dynamic Hover Color */}
                         <h4 
                           className="font-bold text-sm transition-colors group-hover:text-[var(--hover-color)]" 
                           style={{ '--hover-color': primaryColor } as React.CSSProperties}
@@ -491,9 +475,7 @@ export default function ClientPortal() {
         Powered by CoreByte!
       </footer>
 
-      {/* --- MODALS --- */}
-      
-      {/* CANDIDATE DETAIL */}
+      {/* MODALS - CANDIDATE DETAIL */}
       {selectedCandidate && (
         <div className="fixed inset-0 bg-slate-900/30 backdrop-blur-xl flex items-center justify-center z-[80] p-4" onClick={(e) => handleBackdropClick(e, () => setSelectedCandidate(null))}>
           <div className={`rounded-2xl w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-200 ${cardBg} ${isDark ? 'text-white' : 'text-slate-900'}`}>
@@ -610,7 +592,6 @@ export default function ClientPortal() {
                    <div className="bg-purple-50 dark:bg-purple-900/20 p-4 rounded-xl border border-purple-100 dark:border-purple-800 flex gap-4">
                       <div className="p-2 bg-purple-100 dark:bg-purple-800 text-purple-600 dark:text-purple-300 rounded-lg h-fit"><User size={18} /></div>
                       <div>
-                        {/* High Contrast Text Fix */}
                         <h4 className={`font-bold text-sm mb-1 ${isDark ? 'text-slate-200' : 'text-gray-900'}`}>Human Connection</h4>
                         <p className={`text-xs leading-relaxed ${isDark ? 'text-slate-400' : 'text-gray-600'}`}>
                           This info appears in the top right. It tells the client exactly who is taking care of them.
@@ -657,5 +638,13 @@ export default function ClientPortal() {
       )}
 
     </div>
+  );
+}
+
+export default function ClientPortal() {
+  return (
+    <Suspense fallback={<PortalLoading />}>
+      <PortalContent />
+    </Suspense>
   );
 }
