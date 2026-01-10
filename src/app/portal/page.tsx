@@ -1,17 +1,20 @@
-// src/app/portal/page.tsx
-
-import { Suspense } from "react";
-import PortalDashboard from "@/components/PortalDashboard";
+import dynamic from 'next/dynamic';
 import PortalLoading from "@/components/PortalLoading";
 
-// ✅ Force Dynamic: Tells Vercel "Don't build this page statically"
-export const dynamic = "force-dynamic";
+export const dynamicParams = true; 
+
+const PortalDashboard = dynamic(
+  () => import('@/components/PortalDashboard'),
+  { 
+    ssr: false, 
+    loading: () => <PortalLoading /> 
+  }
+);
 
 export default function PortalPage() {
   return (
-    // ✅ Suspense Boundary: Catches the useSearchParams call
-    <Suspense fallback={<PortalLoading />}>
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-900">
       <PortalDashboard />
-    </Suspense>
+    </div>
   );
 }
