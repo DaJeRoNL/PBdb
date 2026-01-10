@@ -69,7 +69,7 @@ export async function middleware(request: NextRequest) {
     // Frames: Allow Google OAuth + Cloudflare Turnstile + Google Docs
     "frame-src 'self' https://docs.google.com https://accounts.google.com https://challenges.cloudflare.com",
     // API connections: Allow Supabase + Google + Cloudflare
-    "connect-src 'self' https://*.supabase.co https://accounts.google.com https://challenges.cloudflare.com",
+    "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://accounts.google.com https://challenges.cloudflare.com",
     // Additional security directives
     "font-src 'self' data:",
     "object-src 'none'",
