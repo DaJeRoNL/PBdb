@@ -31,7 +31,7 @@ const PALETTES = [
   { name: 'Midnight', color: '#0f172a', bgPage: 'bg-[#EBECF0]' },
 ];
 
-// --- INNER CONTENT COMPONENT (Uses useSearchParams) ---
+// --- CONTENT COMPONENT (Logic Moved Here) ---
 function PortalDashboardContent() {
   const [loading, setLoading] = useState(true);
   const [clientInfo, setClientInfo] = useState<any>(null);
@@ -78,7 +78,7 @@ function PortalDashboardContent() {
       }
     }
     loadPortal();
-  }, [impersonateId]); // Re-load if impersonateId changes
+  }, [impersonateId]); // Added dependency to reload on param change
 
   const toggleTheme = () => {
     const newTheme = themeMode === 'dark' ? 'light' : 'dark';
