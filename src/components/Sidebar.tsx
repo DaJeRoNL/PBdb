@@ -1,14 +1,20 @@
 "use client";
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
-import { ShieldAlert, AlertTriangle } from 'lucide-react';
+import { ShieldAlert, LogOut } from 'lucide-react';
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [alertCount, setAlertCount] = useState(0);
+
+  // PlaceByte Menu State
+  const [isPlacebyteHovered, setIsPlacebyteHovered] = useState(false);
+  const [isPlacebyteClicked, setIsPlacebyteClicked] = useState(false);
+  const showPlacebyteMenu = isPlacebyteHovered || isPlacebyteClicked;
 
   useEffect(() => {
     const init = async () => {
@@ -25,14 +31,14 @@ export default function Sidebar() {
   }, []);
 
   const checkAlerts = async () => {
-    // 1. Get the last time the user checked the logs (default to 24h ago if never)
+    // 1. Get the last time the user checked the logs
     const lastViewed = localStorage.getItem('placebyte_last_audit_view');
     
     let queryTime = new Date();
     if (lastViewed) {
       queryTime = new Date(lastViewed);
     } else {
-      queryTime.setDate(queryTime.getDate() - 1); // Default to yesterday
+      queryTime.setDate(queryTime.getDate() - 1); 
     }
 
     // 2. Count ONLY logs created AFTER that time
@@ -40,12 +46,19 @@ export default function Sidebar() {
       .from('security_logs')
       .select('*', { count: 'exact', head: true })
       .or('severity.eq.critical,severity.eq.warning')
-      .gt('created_at', queryTime.toISOString()); // > Last View Time
+      .gt('created_at', queryTime.toISOString()); 
     
     setAlertCount(count || 0);
   };
 
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    router.push('/'); 
+    router.refresh(); 
+  };
+
   const isActive = (path: string) => pathname === path ? "bg-gray-800 text-white" : "text-gray-400 hover:bg-gray-800 hover:text-white";
+  const isPlaceActive = pathname.startsWith('/placebyte');
 
   return (
     <aside className="w-64 bg-gray-900 h-screen fixed left-0 top-0 flex flex-col text-sm font-medium z-50">
@@ -70,11 +83,38 @@ export default function Sidebar() {
           <p className="px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Modules</p>
         </div>
 
-        {/* PlaceByte */}
-        <Link href="/placebyte" className={`${isActive('/placebyte')} group flex items-center px-4 py-2 rounded-md transition-colors`}>
-          <div className="w-2 h-2 rounded-full bg-green-500 mr-4"></div>
-          PlaceByte <span className="ml-auto bg-gray-800 text-xs py-0.5 px-2 rounded-full">CRM</span>
-        </Link>
+        {/* PlaceByte (Expandable) */}
+        <div 
+          onMouseEnter={() => setIsPlacebyteHovered(true)} 
+          onMouseLeave={() => setIsPlacebyteHovered(false)}
+          className="space-y-1"
+        >
+          <button 
+            onClick={() => setIsPlacebyteClicked(!isPlacebyteClicked)}
+            className={`w-full group flex items-center px-4 py-2 rounded-md transition-colors ${isPlaceActive ? "bg-gray-800 text-white" : "text-gray-400 hover:bg-gray-800 hover:text-white"}`}
+          >
+            <div className="w-2 h-2 rounded-full bg-green-500 mr-4"></div>
+            <span className="flex-1 text-left">PlaceByte</span>
+            <span className="bg-gray-800 text-xs py-0.5 px-2 rounded-full">CRM</span>
+          </button>
+
+          {/* Submenu */}
+          <div className={`overflow-hidden transition-all duration-300 ease-in-out ${showPlacebyteMenu ? 'max-h-24 opacity-100 mb-2' : 'max-h-0 opacity-0'}`}>
+            <Link 
+              href="/placebyte" 
+              className={`block pl-10 pr-4 py-2 text-sm rounded-md transition-colors ${pathname.startsWith('/placebyte') ? "text-white font-medium bg-gray-800/50" : "text-gray-500 hover:text-gray-300 hover:bg-gray-800/30"}`}
+            >
+              Accounts
+            </Link>
+            <Link 
+              href="#" 
+              className="block pl-10 pr-4 py-2 text-sm text-gray-600 rounded-md transition-colors cursor-not-allowed"
+              title="Coming Soon"
+            >
+              Talent
+            </Link>
+          </div>
+        </div>
 
         {/* OpsByte */}
         <Link href="/opsbyte" className={`${isActive('/opsbyte')} group flex items-center px-4 py-2 rounded-md transition-colors`}>
@@ -92,9 +132,9 @@ export default function Sidebar() {
         {userEmail === 'team@placebyte.com' && (
           <div className="pt-4 mt-auto">
              <div className="px-4 pb-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Admin</div>
-             <Link href="/audit-logs" className={`${isActive('/audit-logs')} group flex items-center justify-between px-4 py-2 rounded-md transition-colors text-slate-300 hover:bg-slate-800`}>
+             <Link href="/audit-logs" className={`${isActive('/audit-logs')} group flex items-center justify-between px-4 py-2 rounded-md transition-colors`}>
                <div className="flex items-center">
-                 <ShieldAlert className={`mr-3 h-5 w-5 ${alertCount > 0 ? 'text-red-500 animate-pulse' : 'text-gray-500'}`} />
+                 <ShieldAlert className={`mr-3 h-5 w-5 ${alertCount > 0 ? 'text-red-500 animate-pulse' : 'text-gray-500 group-hover:text-white'}`} />
                  Security Logs
                </div>
                {alertCount > 0 && (
@@ -110,14 +150,24 @@ export default function Sidebar() {
 
       {/* Footer / User */}
       <div className="p-4 border-t border-gray-800">
-        <div className="flex items-center w-full text-left">
-          <div className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center text-white font-bold">
-            {userEmail?.[0].toUpperCase() || 'U'}
+        <div className="flex items-center justify-between w-full">
+          <div className="flex items-center min-w-0">
+            <div className="w-8 h-8 rounded-full bg-gray-700 flex-shrink-0 flex items-center justify-center text-white font-bold">
+              {userEmail?.[0].toUpperCase() || 'U'}
+            </div>
+            <div className="ml-3 overflow-hidden">
+              <p className="text-sm font-medium text-white truncate max-w-[8rem]">{userEmail || 'Guest'}</p>
+              <p className="text-xs text-gray-500">Connected</p>
+            </div>
           </div>
-          <div className="ml-3 overflow-hidden">
-            <p className="text-sm font-medium text-white truncate w-32">{userEmail || 'Guest'}</p>
-            <p className="text-xs text-gray-500">Connected</p>
-          </div>
+          
+          <button 
+            onClick={handleLogout}
+            className="p-2 text-gray-500 hover:text-white hover:bg-gray-800 rounded-lg transition-all"
+            title="Sign Out"
+          >
+            <LogOut size={18} />
+          </button>
         </div>
       </div>
     </aside>

@@ -2,6 +2,7 @@
 
 import { supabase } from "../lib/supabaseClient";
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import Sidebar from "../components/Sidebar";
 import Link from "next/link";
 import { Turnstile } from "@marsidev/react-turnstile";
@@ -11,6 +12,7 @@ import {
 } from "lucide-react";
 
 export default function Home() {
+  const router = useRouter();
   const [session, setSession] = useState<any>(null);
   const [isAuthorized, setIsAuthorized] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
@@ -41,14 +43,20 @@ export default function Home() {
       
       if (session?.user) {
         setSession(session);
+        
+        // Check if user has profile (authorized)
         const { data: profile, error } = await supabase
           .from('profiles')
-          .select('id')
+          .select('role')
           .eq('id', session.user.id)
           .single();
 
-        if (profile && !error) setIsAuthorized(true);
-        else setIsAuthorized(false);
+        if (profile && !error) {
+          setIsAuthorized(true);
+          // REMOVED: Auto-redirect logic was here
+        } else {
+          setIsAuthorized(false);
+        }
       } else {
         setSession(null);
       }
@@ -57,18 +65,48 @@ export default function Home() {
 
     checkAuth();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (!session) {
         setSession(null);
         setIsAuthorized(false);
       } else {
         setSession(session);
-        setIsAuthorized(true);
+        
+        // Check authorization when auth state changes
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', session.user.id)
+          .single();
+        
+        if (profile) {
+          setIsAuthorized(true);
+          
+          // REMOVED: Auto-redirect logic was here
+          
+          // Log security event
+          if (event === 'SIGNED_IN') {
+            await supabase.rpc('log_security_event', {
+              p_event_type: 'system_login',
+              p_user_id: session.user.id,
+              p_metadata: { 
+                method: session.user.app_metadata.provider || 'email',
+                email: session.user.email 
+              },
+              p_severity: 'info'
+            });
+          }
+        } else {
+          setIsAuthorized(false);
+        }
       }
     });
 
     return () => subscription.unsubscribe();
-  }, []);
+  }, [router]);
+
+  // ... (Rest of the file remains exactly the same: handleGoogleLogin, handleMagicLink, handleLogout, render)
+  // Re-paste the rest of your functions below to complete the file:
 
   const handleGoogleLogin = async () => {
     if (!captchaToken) {
@@ -77,11 +115,10 @@ export default function Home() {
     }
 
     try {
-      // Cast options to 'any' to bypass TS strictness
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
-          redirectTo: `${window.location.origin}/`,
+          redirectTo: `${window.location.origin}/auth/callback`,
           captchaToken: captchaToken 
         } as any, 
       });
@@ -105,7 +142,7 @@ export default function Home() {
       const { error } = await supabase.auth.signInWithOtp({
         email,
         options: { 
-          emailRedirectTo: `${window.location.origin}/`,
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
           captchaToken: captchaToken
         } as any 
       });
@@ -150,7 +187,6 @@ export default function Home() {
       <div className="flex min-h-screen flex-col items-center justify-center p-8 bg-gray-50">
         <div className="bg-white p-10 rounded-2xl shadow-xl border border-gray-100 text-center max-w-md w-full">
           <div className="mb-6 flex justify-center">
-            {/* ✅ LOGO IMAGE - Standard img tag with no size constraints renders at original size */}
             <img 
               src="/PBFweb48.png" 
               alt="PlaceByte Logo" 
@@ -211,7 +247,7 @@ export default function Home() {
             Sign In with Google
           </button>
 
-          {/* --- TURNSTILE WIDGET (Moved to Bottom) --- */}
+          {/* --- TURNSTILE WIDGET --- */}
           <div className="mt-8 bg-slate-50 border border-slate-100 rounded-xl p-3 relative group hover:border-slate-200 transition-colors">
             <div className="absolute top-2 right-2 opacity-10">
               <Lock size={12} className="text-slate-900" />
@@ -262,7 +298,7 @@ export default function Home() {
             </p>
             <div className="bg-gray-50 p-4 rounded-xl mb-6 text-left border border-gray-100">
                <p className="text-xs font-bold text-gray-500 uppercase mb-1">Action Required</p>
-               <p className="text-sm text-gray-700">Contact administrator to add your email.</p>
+               <p className="text-sm text-gray-700">Contact administrator to add your account.</p>
             </div>
             <button
               onClick={handleLogout}

@@ -8,6 +8,18 @@ const rateLimit = new Map();
 const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
 const MAX_REQUESTS = 100; // 100 requests per minute per IP
 
+// --- GEOGRAPHIC RESTRICTION CONFIG ---
+const ALLOWED_COUNTRIES = ['NL', 'PH']; // Netherlands, Philippines
+const GEO_RESTRICTION_ENABLED = process.env.GEO_RESTRICTION_ENABLED === 'true';
+
+// Whitelist for bypass (e.g., your home IP, office IP)
+// Format: Comma-separated IPs, whitespace is automatically trimmed
+// Example: "203.123.45.67, 185.98.76.54, 192.168.1.100"
+const WHITELISTED_IPS = (process.env.WHITELISTED_IPS || '')
+  .split(',')
+  .map(ip => ip.trim())
+  .filter(Boolean);
+
 export async function middleware(request: NextRequest) {
   // --- 0. KILL SWITCH (PANIC MODE) ---
   // If set to "true" in Vercel Env Vars, immediately blocks ALL access.
@@ -15,9 +27,51 @@ export async function middleware(request: NextRequest) {
     return new NextResponse('SYSTEM LOCKDOWN INITIATED. ACCESS REVOKED.', { status: 503 });
   }
 
-  // FIX: Get IP from headers to avoid TypeScript error on 'request.ip'
+  // Get IP from headers
   const forwardedFor = request.headers.get('x-forwarded-for');
-  const ip = forwardedFor ? forwardedFor.split(',')[0] : '127.0.0.1';
+  const ip = forwardedFor ? forwardedFor.split(',')[0].trim() : '127.0.0.1';
+  
+  // --- 0.5. GEOGRAPHIC IP RESTRICTION (NL + PH ONLY) ---
+  if (GEO_RESTRICTION_ENABLED) {
+    // Check if IP is whitelisted first
+    const isWhitelisted = WHITELISTED_IPS.includes(ip);
+    
+    if (!isWhitelisted) {
+      // Get country from Vercel's geo object (runtime only) or fallback to header
+      // TypeScript doesn't know about request.geo, but it exists at runtime on Vercel
+      const country = (request as any).geo?.country || request.headers.get('x-vercel-ip-country');
+      
+      // Block if country is not NL or PH
+      if (country && !ALLOWED_COUNTRIES.includes(country)) {
+        console.log(`[GEO-BLOCK] Blocked access from ${country} (IP: ${ip})`);
+        
+        return new NextResponse(
+          JSON.stringify({
+            error: 'Access Denied',
+            message: 'Geographic restriction: Access is only allowed from authorized regions.',
+            blocked_country: country,
+            blocked_ip: ip,
+            support: 'If you believe this is an error, contact your system administrator.'
+          }),
+          {
+            status: 403,
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Geo-Blocked': 'true',
+              'X-Blocked-Country': country,
+            }
+          }
+        );
+      }
+      
+      // Log successful geo-check for monitoring (only when enabled)
+      if (country && ALLOWED_COUNTRIES.includes(country)) {
+        console.log(`[GEO-ALLOW] Access from ${country} (IP: ${ip})`);
+      }
+    } else {
+      console.log(`[GEO-WHITELIST] Whitelisted IP access: ${ip}`);
+    }
+  }
   
   // --- 1. HTTPS REDIRECT ---
   if (process.env.NODE_ENV === 'production' && 
@@ -55,7 +109,7 @@ export async function middleware(request: NextRequest) {
     'max-age=31536000; includeSubDomains'
   );
   
-  // Content Security Policy - UPDATED WITH CLOUDFLARE TURNSTILE SUPPORT
+  // Content Security Policy - WITH CLOUDFLARE TURNSTILE SUPPORT
   const cspDirectives = [
     "default-src 'self'",
     // Script sources: Allow Google OAuth + Cloudflare Turnstile
@@ -66,9 +120,9 @@ export async function middleware(request: NextRequest) {
     "style-src 'self' 'unsafe-inline' https://accounts.google.com",
     // Images: Allow self, data URIs, blobs, and Google user content
     "img-src 'self' data: blob: https://*.googleusercontent.com",
-    // Frames: Allow Google OAuth + Cloudflare Turnstile + Google Docs
+    // Frames: Allow Google OAuth + Cloudflare Turnstile + Google Docs + blob for PDF preview
     "frame-src 'self' blob: https://docs.google.com https://accounts.google.com https://challenges.cloudflare.com",
-    // API connections: Allow Supabase + Google + Cloudflare
+    // API connections: Allow Supabase (HTTP + WebSocket) + Google + Cloudflare
     "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://accounts.google.com https://challenges.cloudflare.com",
     // Additional security directives
     "font-src 'self' data:",
@@ -111,7 +165,7 @@ export async function middleware(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
 
   // 6. Redirect Logic
-  if (!user && request.nextUrl.pathname !== '/') {
+  if (!user && request.nextUrl.pathname !== '/' && !request.nextUrl.pathname.startsWith('/auth')) {
     const redirectUrl = new URL('/', request.url);
     return NextResponse.redirect(redirectUrl);
   }
