@@ -55,11 +55,34 @@ export async function middleware(request: NextRequest) {
     'max-age=31536000; includeSubDomains'
   );
   
-  // Content Security Policy
-  response.headers.set(
-    'Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://apis.google.com https://accounts.google.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.googleusercontent.com; frame-src 'self' https://docs.google.com https://accounts.google.com; connect-src 'self' https://*.supabase.co https://accounts.google.com;"
-  );
+  // Content Security Policy - UPDATED WITH CLOUDFLARE TURNSTILE SUPPORT
+  const cspDirectives = [
+    "default-src 'self'",
+    // Script sources: Allow Google OAuth + Cloudflare Turnstile
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://apis.google.com https://accounts.google.com https://challenges.cloudflare.com",
+    // Script element sources: Required for Turnstile widget script tag
+    "script-src-elem 'self' 'unsafe-inline' https://apis.google.com https://accounts.google.com https://challenges.cloudflare.com",
+    // Styles: Allow inline styles and Google
+    "style-src 'self' 'unsafe-inline' https://accounts.google.com",
+    // Images: Allow self, data URIs, blobs, and Google user content
+    "img-src 'self' data: blob: https://*.googleusercontent.com",
+    // Frames: Allow Google OAuth + Cloudflare Turnstile + Google Docs
+    "frame-src 'self' https://docs.google.com https://accounts.google.com https://challenges.cloudflare.com",
+    // API connections: Allow Supabase + Google + Cloudflare
+    "connect-src 'self' https://*.supabase.co https://accounts.google.com https://challenges.cloudflare.com",
+    // Additional security directives
+    "font-src 'self' data:",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'"
+  ];
+  
+  response.headers.set('Content-Security-Policy', cspDirectives.join('; '));
+
+  // Additional security headers
+  response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  response.headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
 
   // --- 5. SUPABASE AUTH & RBAC ---
   const supabase = createServerClient(
