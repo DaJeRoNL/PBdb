@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, Suspense } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useSearchParams } from "next/navigation";
 import PortalLoading from "@/components/PortalLoading";
@@ -31,8 +31,8 @@ const PALETTES = [
   { name: 'Midnight', color: '#0f172a', bgPage: 'bg-[#EBECF0]' },
 ];
 
-// --- CONTENT COMPONENT (Logic Moved Here) ---
-function PortalDashboardContent() {
+// --- MAIN COMPONENT ---
+export default function PortalDashboard() {
   const [loading, setLoading] = useState(true);
   const [clientInfo, setClientInfo] = useState<any>(null);
   const [candidates, setCandidates] = useState<any[]>([]);
@@ -78,7 +78,7 @@ function PortalDashboardContent() {
       }
     }
     loadPortal();
-  }, [impersonateId]); // Added dependency to reload on param change
+  }, [impersonateId]);
 
   const toggleTheme = () => {
     const newTheme = themeMode === 'dark' ? 'light' : 'dark';
@@ -641,13 +641,4 @@ function PortalDashboardContent() {
 
     </div>
   );
-}
-
-// --- OUTER WRAPPER (Exports to Page) ---
-export default function PortalDashboard() {
-  return (
-    <Suspense fallback={<PortalLoading />}>
-      <PortalDashboardContent />
-    </Suspense>
-  )
 }
