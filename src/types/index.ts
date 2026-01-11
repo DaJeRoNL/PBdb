@@ -9,12 +9,25 @@ export interface Lead {
   notes: string;
 }
 
+export type CandidateStatus = 'New' | 'Screening' | 'Interview' | 'Offer' | 'Placed' | 'Rejected';
+
 export interface Candidate {
   id: string;
-  created_at: string;
   name: string;
   role: string;
+  location: string;
+  salary_expectations: number;
+  skills: string[];
+  status: CandidateStatus;
+  match_score: number;
+  last_active: string;
   email: string;
-  status: string;
-  is_deleted: boolean;
+  phone: string;
+  experience_years: number;
+  current_company?: string;
+  notes_count: number;
+  avatar_color: string;
+  placed_at?: string;
+  fee?: number;
+  rejected_reason?: string;
 }
