@@ -15,6 +15,8 @@ import EditCandidateModal from "./components/EditCandidateModal";
 import EmailModal from "./components/EmailModal";
 import PlacementsHub from "../placements/PlacementsHub"; 
 
+export const dynamic = "force-dynamic";
+
 // Helper function for avatar colors
 const getColorFromStr = (str: string) => {
   const colors = ["bg-blue-100 text-blue-700", "bg-purple-100 text-purple-700", "bg-green-100 text-green-700", "bg-orange-100 text-orange-700", "bg-pink-100 text-pink-700"];
@@ -127,19 +129,14 @@ export default function TalentPage() {
     }
   };
 
-  // --- MOVED UP: MEMOS MUST RUN BEFORE ANY RETURNS ---
-  
   const filteredCandidates = useMemo(() => {
-    // Optimization: Don't filter if we aren't displaying them
+    // Optimization: If we are in placements tab, we don't need to filter candidates for the list
     if (currentTab === 'placements') return [];
 
     return candidates.filter(c => {
-      // Archive View
       if (currentTab === 'archive') {
         if (!(c as any).is_deleted && c.status !== 'Rejected') return false;
-      } 
-      // Active View
-      else {
+      } else {
         if ((c as any).is_deleted) return false;
         if (c.status === 'Rejected' || c.status === 'Placed') return false;
       }
@@ -167,12 +164,13 @@ export default function TalentPage() {
     [candidates, selectedIds]
   );
 
-  // --- END MEMOS ---
-
-  // ✅ NOW WE CAN RETURN EARLY FOR PLACEMENTS
+  // ✅ NOW we can safely return the Placements Hub if active
+  // This ensures all hooks above run consistently on every render
   if (currentTab === 'placements') {
     return <PlacementsHub />;
   }
+
+  // --- Helper Functions ---
 
   const clearSelection = () => {
     setSelectedIds(new Set());
@@ -200,6 +198,7 @@ export default function TalentPage() {
   };
 
   const handleBatchDelete = async () => {
+    setContextMenu(null);
     if (!confirm(`Archive ${selectedIds.size} candidates?`)) return;
     
     const { error } = await supabase
@@ -233,8 +232,8 @@ export default function TalentPage() {
   };
 
   const handleEmailClick = () => {
-    if (selectedIds.size === 0) return;
-    setShowEmailModal(true);
+    setContextMenu(null);
+    if (selectedIds.size > 0) setShowEmailModal(true);
   };
 
   const handleEmailFromDrawer = (candidate: Candidate) => {
@@ -338,7 +337,11 @@ export default function TalentPage() {
         onSaveFilter={saveCurrentFilter}
         onApplyFilter={applySavedFilter}
         onShowViewManager={() => setShowViewManager(true)}
-        onAddClick={() => setShowAddModal(true)}
+        onAddClick={() => { 
+          // setCandidateForm({}); // Remove old ref
+          // setEditingCandidateId(null); // Remove old ref
+          setShowAddModal(true); 
+        }}
       />
 
       <div className="flex-1 w-full min-w-0 overflow-hidden relative">

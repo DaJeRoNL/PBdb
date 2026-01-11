@@ -14,6 +14,8 @@ import Link from "next/link";
 import ContractViewer from "@/components/ContractViewer";
 import { generateAccountReport } from "@/lib/reportGenerator"; 
 
+export const dynamic = "force-dynamic";
+
 // --- TYPES ---
 type Tab = 'overview' | 'commercials' | 'team' | 'notes';
 
@@ -34,7 +36,6 @@ const REQUIRED_OPS = ['project_deadline', 'owner_id'];
 const REQUIRED_FIELDS = [...REQUIRED_COMMERCIALS, ...REQUIRED_OPS];
 
 export default function AccountsDashboard() {
-  // ... (All existing state and effects remain the same) ...
   const [loading, setLoading] = useState(true);
   const [accounts, setAccounts] = useState<any[]>([]);
   const [filteredAccounts, setFilteredAccounts] = useState<any[]>([]);
