@@ -1,14 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { Candidate } from "@/types";
 import { X, Edit3, Trash2, Save, Calendar, Linkedin, ExternalLink, 
-         ArrowRightLeft, Check, Copy } from "lucide-react";
+         ArrowRightLeft, Check, Copy, FileText, Upload } from "lucide-react";
 import { StatusBadge } from "./StatusBadge";
 import { supabase } from "@/lib/supabaseClient";
 
-// ✅ Import Phase 3 Components
+// Components
 import FlagManager from "./FlagManager";
 import MentionInput from "./MentionInput";
 import HandoffModal from "./HandoffModal";
+import ResumeParser from "@/components/ResumeParser";
+import ResumeViewer from "@/components/ResumeViewer";
 
 interface TalentDrawerProps {
   candidate: Candidate | null;
@@ -32,8 +34,10 @@ export default function TalentDrawer({
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [nameCopied, setNameCopied] = useState(false);
   
-  // ✅ New State for Handoff
+  // Modals
   const [showHandoff, setShowHandoff] = useState(false);
+  const [showParser, setShowParser] = useState(false);
+  const [showViewer, setShowViewer] = useState(false);
 
   useEffect(() => {
     const getUser = async () => {
@@ -85,7 +89,7 @@ export default function TalentDrawer({
     const { error } = await supabase.from('candidates').update({ status: newStatus, last_contacted_at: new Date().toISOString() }).eq('id', sidebarData.id);
     if (!error) {
       await logActivity(sidebarData.id, 'Status Change', `Status moved to ${newStatus}`);
-      setSidebarData({ ...sidebarData, status: newStatus });
+      setSidebarData((prev: any) => ({ ...prev, status: newStatus }));
       onUpdate();
     }
   };
@@ -97,10 +101,46 @@ export default function TalentDrawer({
 
   const handleAddNote = async () => {
     if (!noteContent.trim() || !sidebarData) return;
+    
+    // 1. Insert the Note Activity
     const { error } = await supabase.from('candidate_activity').insert([{
-      candidate_id: sidebarData.id, action_type: 'Note', description: noteContent, author_id: currentUser?.id
+      candidate_id: sidebarData.id, 
+      action_type: 'Note', 
+      description: noteContent, 
+      author_id: currentUser?.id
     }]);
-    if (!error) { setNoteContent(""); fetchLogs(sidebarData.id); }
+
+    if (!error) { 
+      // 2. Detect Mentions & Create Notifications
+      const notificationsToInsert: any[] = [];
+      
+      internalStaff.forEach(staff => {
+        if (!staff.email) return;
+        
+        const handle = `@${staff.email.split('@')[0]}`;
+        const regex = new RegExp(`${handle}\\b`, 'i');
+        
+        if (regex.test(noteContent)) {
+          notificationsToInsert.push({
+            user_id: staff.id,
+            type: 'mention',
+            title: 'You were mentioned',
+            message: `${currentUser?.email || 'A team member'} mentioned you in a note about ${sidebarData.name}`,
+            is_read: false,
+            created_at: new Date().toISOString(),
+            metadata: { candidate_id: sidebarData.id }
+          });
+        }
+      });
+
+      if (notificationsToInsert.length > 0) {
+        const { error: notifError } = await supabase.from('notifications').insert(notificationsToInsert);
+        if (notifError) console.error("Notification Error:", notifError);
+      }
+
+      setNoteContent(""); 
+      fetchLogs(sidebarData.id); 
+    }
   };
 
   const handleCopyName = async () => {
@@ -108,6 +148,62 @@ export default function TalentDrawer({
     await navigator.clipboard.writeText(sidebarData.name);
     setNameCopied(true);
     setTimeout(() => setNameCopied(false), 2000);
+  };
+
+  const handleParseComplete = async (parsedData: any) => {
+    await logActivity(sidebarData.id, 'Resume Parsed', 'Updated profile with new resume data');
+    setSidebarData((prev: any) => ({ ...prev, ...parsedData }));
+    onUpdate();
+  };
+
+  const handleResumeUpdate = async (url: string, fileId?: string) => {
+    try {
+      // 1. Update Candidate Record
+      const { error } = await supabase.from('candidates').update({ 
+        resume_url: url 
+      }).eq('id', sidebarData.id);
+
+      if (error) {
+        // Check for specific constraint error
+        if (error.message && (error.message.includes('valid_entity_type') || error.message.includes('valid_action_type'))) {
+           console.error("DB Constraint Error: The database trigger 'action_history' is blocking this update. Run the migration script to fix.");
+           alert("System Error: Database constraint 'valid_entity_type' blocked this update. Please contact admin to run migration.");
+        }
+        throw error;
+      }
+
+      setSidebarData((prev: any) => ({ ...prev, resume_url: url }));
+      
+      // 2. Also log as document if fileId provided
+      if (fileId) {
+        try {
+            await supabase.from('candidate_documents').insert([{
+            candidate_id: sidebarData.id,
+            file_id: fileId,
+            file_url: url,
+            document_type: 'resume',
+            file_name: 'Attached via Viewer',
+            parsing_status: 'completed'
+            }]);
+        } catch (docError) {
+            console.warn("Could not log document record (non-critical):", docError);
+        }
+      }
+
+      await logActivity(sidebarData.id, 'Resume Attached', 'Manual attachment via viewer');
+      onUpdate();
+    } catch (error: any) {
+      // Safe error logging
+      const msg = error?.message || (typeof error === 'object' ? JSON.stringify(error) : String(error));
+      console.error("Failed to save resume URL:", msg);
+      
+      if (msg.includes('action_history')) {
+          console.warn("Action history logging failed, but resume might be saved.");
+          setSidebarData((prev: any) => ({ ...prev, resume_url: url }));
+      } else {
+          throw error;
+      }
+    }
   };
 
   if (!isOpen || !sidebarData) return null;
@@ -139,15 +235,31 @@ export default function TalentDrawer({
       </div>
 
       {/* Quick Actions */}
-      <div className="px-6 py-3 border-b border-gray-100 flex gap-2">
+      <div className="px-6 py-3 border-b border-gray-100 flex flex-wrap gap-2">
         <button onClick={() => onEmail && onEmail(sidebarData)} className="flex-1 bg-blue-600 text-white py-2 rounded-lg text-sm font-bold hover:bg-blue-700 transition">Email</button>
         <button onClick={() => onEdit && onEdit(sidebarData)} className="flex-1 bg-white border border-gray-300 text-gray-700 py-2 rounded-lg text-sm font-bold hover:bg-gray-50 transition flex items-center justify-center gap-2"><Edit3 size={14}/> Edit</button>
-        {/* ✅ Handoff Button Added */}
         <button onClick={() => setShowHandoff(true)} className="p-2 border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50" title="Handoff Ownership"><ArrowRightLeft size={18}/></button>
         <button onClick={() => onDelete && onDelete(sidebarData.id)} className="p-2 border border-red-200 text-red-500 rounded-lg hover:bg-red-50"><Trash2 size={18}/></button>
       </div>
 
       <div className="flex-1 overflow-y-auto p-6 space-y-8">
+        
+        {/* Resume Actions */}
+        <div className="grid grid-cols-2 gap-3">
+          <button 
+            onClick={() => setShowParser(true)}
+            className="flex items-center justify-center gap-2 p-3 bg-purple-50 text-purple-700 border border-purple-200 rounded-lg text-sm font-bold hover:bg-purple-100 transition"
+          >
+            <Upload size={16} /> Parse Resume
+          </button>
+          <button 
+            onClick={() => setShowViewer(true)}
+            className="flex items-center justify-center gap-2 p-3 bg-gray-50 text-gray-700 border border-gray-200 rounded-lg text-sm font-bold hover:bg-gray-100 transition"
+          >
+            <FileText size={16} /> View Resume
+          </button>
+        </div>
+
         {/* Next Action */}
         <div className="bg-yellow-50 p-4 rounded-xl border border-yellow-200">
           <h3 className="text-xs font-bold text-yellow-900 uppercase tracking-wider mb-3">Next Action</h3>
@@ -157,7 +269,6 @@ export default function TalentDrawer({
           </div>
         </div>
 
-        {/* ✅ Flag Manager Integration */}
         <FlagManager candidateId={sidebarData.id} />
 
         {/* Candidate Details */}
@@ -190,7 +301,7 @@ export default function TalentDrawer({
           </div>
         )}
 
-        {/* Activity Log with ✅ MentionInput */}
+        {/* Activity Log */}
         <div className="border-t border-gray-100 pt-6">
           <h3 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-4">Activity Log</h3>
           <div className="bg-gray-50 p-3 rounded-xl border border-gray-200 mb-4">
@@ -218,13 +329,29 @@ export default function TalentDrawer({
         </div>
       </div>
 
-      {/* ✅ Handoff Modal */}
+      {/* Modals */}
       <HandoffModal 
         isOpen={showHandoff} 
         onClose={() => setShowHandoff(false)} 
         candidateId={sidebarData.id} 
         currentOwnerId={sidebarData.owner_id}
         onSuccess={() => { onUpdate(); fetchLogs(sidebarData.id); }}
+      />
+
+      {showParser && (
+        <ResumeParser
+          candidateId={sidebarData.id}
+          onParseComplete={handleParseComplete}
+          onClose={() => setShowParser(false)}
+        />
+      )}
+
+      <ResumeViewer
+        isOpen={showViewer}
+        onClose={() => setShowViewer(false)}
+        initialResumeUrl={sidebarData.resume_url} 
+        onUpdateUrl={handleResumeUpdate} 
+        sidebarWidth="500px"
       />
     </div>
   );

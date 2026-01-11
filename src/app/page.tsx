@@ -7,9 +7,10 @@ import Sidebar from "../components/Sidebar";
 import Link from "next/link";
 import { Turnstile } from "@marsidev/react-turnstile";
 import { 
-  Activity, Users, Layers, Zap, ArrowRight, Plus, 
-  Clock, ShieldAlert, CheckCircle, BarChart3, Bell, Lock
+  Activity, Users, Zap, ArrowRight, Plus, 
+  Clock, ShieldAlert, CheckCircle, BarChart3, Bell
 } from "lucide-react";
+import NotificationBell from "@/components/NotificationBell";
 
 export default function Home() {
   const router = useRouter();
@@ -44,7 +45,6 @@ export default function Home() {
         
         if (error) {
            console.error("Auth check failed:", error);
-           // Optional: setLoading(false) here or let it fall through
         }
 
         if (session?.user) {
@@ -91,9 +91,6 @@ export default function Home() {
         if (profile) {
           setIsAuthorized(true);
           
-          // REMOVED: Auto-redirect logic was here
-          
-          // Log security event
           if (event === 'SIGNED_IN') {
             await supabase.rpc('log_security_event', {
               p_event_type: 'system_login',
@@ -256,7 +253,7 @@ export default function Home() {
           {/* --- TURNSTILE WIDGET --- */}
           <div className="mt-8 bg-slate-50 border border-slate-100 rounded-xl p-3 relative group hover:border-slate-200 transition-colors">
             <div className="absolute top-2 right-2 opacity-10">
-              <Lock size={12} className="text-slate-900" />
+              {/* <Lock size={12} className="text-slate-900" /> */}
             </div>
 
             <div className="flex justify-center">
@@ -333,10 +330,9 @@ export default function Home() {
             </p>
           </div>
           <div className="flex items-center gap-4">
-            <button className="p-2 text-gray-400 hover:text-gray-600 hover:bg-white rounded-full transition-colors relative">
-               <Bell size={20} />
-               <span className="absolute top-1.5 right-1.5 h-2 w-2 bg-red-500 rounded-full border-2 border-gray-50"></span>
-            </button>
+            <div className="relative">
+               <NotificationBell />
+            </div>
             <div className="h-8 w-[1px] bg-gray-200"></div>
             <div className="flex items-center gap-3">
                <div className="text-right hidden sm:block">
