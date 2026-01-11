@@ -3,7 +3,7 @@ import { useState, useMemo, useEffect, useRef } from "react";
 import { useSearchParams } from "next/navigation"; 
 import { supabase } from "@/lib/supabaseClient";
 import { Candidate } from "@/types";
-import { Mail, Briefcase, Trash2, Archive, X } from "lucide-react";
+import { Mail, Briefcase, Trash2, Archive, X, Pencil } from "lucide-react";
 
 // Components
 import TalentFilter from "./components/TalentFilter";
@@ -11,6 +11,15 @@ import TalentList from "./components/TalentList";
 import TalentBoard from "./components/TalentBoard";
 import TalentDrawer from "./components/TalentDrawer";
 import AddCandidateModal from "./components/AddCandidateModal";
+import EmailModal from "./components/EmailModal";
+
+// Helper function for avatar colors
+const getColorFromStr = (str: string) => {
+  const colors = ["bg-blue-100 text-blue-700", "bg-purple-100 text-purple-700", "bg-green-100 text-green-700", "bg-orange-100 text-orange-700", "bg-pink-100 text-pink-700"];
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  return colors[Math.abs(hash) % colors.length];
+};
 
 export default function TalentPage() {
   const searchParams = useSearchParams();
@@ -18,77 +27,134 @@ export default function TalentPage() {
 
   // View & Data State
   const [candidates, setCandidates] = useState<Candidate[]>([]);
-  const [activePositions, setActivePositions] = useState<any[]>([]);
   const [viewMode, setViewMode] = useState<'list' | 'board'>('list');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [internalStaff, setInternalStaff] = useState<any[]>([]);
   
   // Selection
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isSelectionMode, setIsSelectionMode] = useState(false);
-  const [contextMenu, setContextMenu] = useState<{ visible: boolean, x: number, y: number, candidateId?: string } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ visible: boolean, x: number, y: number } | null>(null);
   const inactivityTimer = useRef<NodeJS.Timeout | null>(null);
 
   // Modals
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showViewManager, setShowViewManager] = useState(false);
+  const [showEmailModal, setShowEmailModal] = useState(false);
+  const [editingCandidateId, setEditingCandidateId] = useState<string | null>(null);
+  const [candidateForm, setCandidateForm] = useState<any>({});
 
   // Filter State
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState<string>("All");
-  const [filterRole, setFilterRole] = useState<string>("All");
+  const [filterOwner, setFilterOwner] = useState<string>("All");
+  const [savedFilters, setSavedFilters] = useState<any[]>([]);
 
   useEffect(() => {
-    fetchCandidates();
-    fetchActiveScopes();
+    init();
     
-    // Global Event Handlers
-    const handleGlobalClick = () => { setContextMenu(null); resetInactivityTimer(); };
+    // Load saved filters
+    const saved = localStorage.getItem('pb_talent_filters');
+    if (saved) {
+      try {
+        setSavedFilters(JSON.parse(saved));
+      } catch (e) {
+        console.error("Failed to parse saved filters", e);
+      }
+    }
+
+    const handleGlobalClick = () => { 
+      setContextMenu(null); 
+      resetInactivityTimer(); 
+    };
+    
     window.addEventListener('click', handleGlobalClick);
     return () => window.removeEventListener('click', handleGlobalClick);
   }, []);
 
   useEffect(() => {
     if (currentTab !== 'active') setViewMode('list');
+    setSelectedIds(new Set());
+    setIsSelectionMode(false);
+    fetchCandidates();
   }, [currentTab]);
+
+  const init = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    setCurrentUser(session?.user);
+    
+    const { data: staff } = await supabase
+      .from('profiles')
+      .select('id, email')
+      .eq('role', 'internal');
+    setInternalStaff(staff || []);
+    
+    fetchCandidates();
+  };
+
+  const fetchCandidates = async () => {
+    let query = supabase
+      .from('candidates')
+      .select('*, owner:profiles(email)')
+      .order('created_at', { ascending: false });
+
+    if (currentTab !== 'archive') {
+      query = query.eq('is_deleted', false);
+    }
+
+    const { data, error } = await query;
+    if (!error && data) {
+      setCandidates(data.map((c: any) => ({
+        ...c,
+        avatar_color: getColorFromStr(c.name),
+        skills: c.skills || []
+      })));
+    }
+  };
 
   const resetInactivityTimer = () => {
     if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
     if (isSelectionMode) {
-        inactivityTimer.current = setTimeout(() => { clearSelection(); }, 30000);
-    }
-  };
-
-  const fetchCandidates = async () => {
-    const { data } = await supabase.from('candidates').select('*').order('created_at', { ascending: false });
-    if (data) setCandidates(data);
-  };
-
-  const fetchActiveScopes = async () => {
-    const { data } = await supabase.from('clients').select('name, commercial_products').not('commercial_products', 'is', null);
-    if (data) {
-      const positions: any[] = [];
-      data.forEach((client: any) => {
-        if (Array.isArray(client.commercial_products)) {
-          client.commercial_products.forEach((prod: any) => positions.push({ role: prod.name, client: client.name }));
-        }
-      });
-      setActivePositions(positions);
+      inactivityTimer.current = setTimeout(() => { 
+        setSelectedIds(new Set()); 
+        setIsSelectionMode(false); 
+      }, 30000);
     }
   };
 
   const filteredCandidates = useMemo(() => {
     return candidates.filter(c => {
-      if (currentTab === 'active' && (c.status === 'Placed' || c.status === 'Rejected')) return false;
       if (currentTab === 'placements' && c.status !== 'Placed') return false;
-      if (currentTab === 'archive' && c.status !== 'Rejected') return false;
+      if (currentTab === 'archive') {
+        if (!(c as any).is_deleted && c.status !== 'Rejected') return false;
+      } else {
+        if ((c as any).is_deleted) return false;
+        if (c.status === 'Rejected' || c.status === 'Placed') return false;
+      }
 
-      const matchesSearch = c.name.toLowerCase().includes(searchQuery.toLowerCase()) || c.role.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesStatus = filterStatus === "All" || c.status === filterStatus;
-      const matchesRole = filterRole === "All" || c.role.includes(filterRole);
-      return matchesSearch && matchesStatus && matchesRole;
+      const searchLower = searchQuery.toLowerCase();
+      const matchesSearch = c.name.toLowerCase().includes(searchLower) || 
+                           c.role.toLowerCase().includes(searchLower) || 
+                           (c.email || "").toLowerCase().includes(searchLower);
+      if (!matchesSearch) return false;
+
+      if (filterStatus !== "All" && c.status !== filterStatus) return false;
+      if (filterOwner === "Me" && (c as any).owner_id !== currentUser?.id) return false;
+
+      return true;
     });
-  }, [candidates, searchQuery, filterStatus, filterRole, currentTab]);
+  }, [candidates, searchQuery, filterStatus, filterOwner, currentTab, currentUser]);
 
-  const selectedCandidate = useMemo(() => candidates.find(c => c.id === selectedId) || null, [candidates, selectedId]);
+  const selectedCandidate = useMemo(() => 
+    candidates.find(c => c.id === selectedId) || null, 
+    [candidates, selectedId]
+  );
+
+  const selectedCandidates = useMemo(() =>
+    candidates.filter(c => selectedIds.has(c.id)),
+    [candidates, selectedIds]
+  );
 
   const clearSelection = () => {
     setSelectedIds(new Set());
@@ -100,33 +166,134 @@ export default function TalentPage() {
     if (!forceSelect && newSet.has(id)) newSet.delete(id);
     else newSet.add(id);
     setSelectedIds(newSet);
-    if (newSet.size === 0 && !forceSelect) setTimeout(() => setIsSelectionMode(false), 300);
+    setIsSelectionMode(newSet.size > 0);
+    if (newSet.size === 0 && !forceSelect) {
+      setTimeout(() => setIsSelectionMode(false), 300);
+    }
   };
 
   const toggleAll = () => {
-    if (selectedIds.size === filteredCandidates.length) clearSelection();
-    else {
-        setSelectedIds(new Set(filteredCandidates.map(c => c.id)));
-        setIsSelectionMode(true);
+    if (selectedIds.size === filteredCandidates.length) {
+      clearSelection();
+    } else {
+      setSelectedIds(new Set(filteredCandidates.map(c => c.id)));
+      setIsSelectionMode(true);
     }
   };
 
-  const handleBatchAction = async (action: string) => {
-    if (action === 'Deleted') {
-        if (!confirm(`Delete ${selectedIds.size} candidates?`)) return;
-        await supabase.from('candidates').delete().in('id', Array.from(selectedIds));
-        fetchCandidates();
+  const handleBatchDelete = async () => {
+    if (!confirm(`Archive ${selectedIds.size} candidates?`)) return;
+    
+    const { error } = await supabase
+      .from('candidates')
+      .update({ is_deleted: true })
+      .in('id', Array.from(selectedIds));
+
+    if (!error) {
+      fetchCandidates();
+      clearSelection();
+      if (selectedId && selectedIds.has(selectedId)) {
+        setSelectedId(null);
+      }
     }
-    setContextMenu(null);
-    clearSelection();
+  };
+
+  const handleRestore = async (id: string) => {
+    const { error } = await supabase
+      .from('candidates')
+      .update({ is_deleted: false })
+      .eq('id', id);
+    
+    if (!error) {
+      fetchCandidates();
+    }
+  };
+
+  const openEditModal = (candidate: Candidate) => {
+    const c = candidate as any;
+    setCandidateForm({
+      name: c.name, 
+      email: c.email || "", 
+      role: c.role, 
+      status: c.status,
+      owner_id: c.owner_id || "", 
+      salary_expectations: c.salary_expectations || 0,
+      location: c.location || "", 
+      notice_period: c.notice_period || "", 
+      linkedin: c.linkedin || "",
+      notes: "", 
+      next_action: c.next_action || "", 
+      next_action_date: c.next_action_date || ""
+    });
+    setEditingCandidateId(c.id);
+    setShowAddModal(true);
+  };
+
+  const handleEmailClick = () => {
+    if (selectedIds.size === 0) return;
+    setShowEmailModal(true);
+  };
+
+  const handleEmailFromDrawer = (candidate: Candidate) => {
+    setSelectedIds(new Set([candidate.id]));
+    setShowEmailModal(true);
+  };
+
+  const saveCurrentFilter = () => {
+    const name = prompt("Name this view:", `View ${savedFilters.length + 1}`);
+    if (!name) return;
+    
+    const newFilter = { 
+      id: Date.now().toString(), 
+      name, 
+      status: filterStatus, 
+      owner: filterOwner 
+    };
+    const updated = [...savedFilters, newFilter];
+    setSavedFilters(updated);
+    localStorage.setItem('pb_talent_filters', JSON.stringify(updated));
+  };
+
+  const deleteSavedFilter = (id: string) => {
+    const updated = savedFilters.filter(f => f.id !== id);
+    setSavedFilters(updated);
+    localStorage.setItem('pb_talent_filters', JSON.stringify(updated));
+  };
+
+  const renameSavedFilter = (id: string, newName: string) => {
+    const updated = savedFilters.map(f => f.id === id ? { ...f, name: newName } : f);
+    setSavedFilters(updated);
+    localStorage.setItem('pb_talent_filters', JSON.stringify(updated));
+  };
+
+  const applySavedFilter = (f: any) => {
+    setFilterStatus(f.status);
+    setFilterOwner(f.owner);
   };
 
   return (
     <div className="flex flex-col h-full w-full bg-slate-50 relative overflow-hidden" 
       onClick={() => { setContextMenu(null); if (!isSelectionMode) clearSelection(); }}
     >
-      {/* ADD MODAL */}
-      {showAddModal && <AddCandidateModal onClose={() => setShowAddModal(false)} onSuccess={fetchCandidates} />}
+      {/* BULK ACTIONS BAR */}
+      {selectedIds.size > 0 && (
+        <div className="absolute top-6 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white px-6 py-3 rounded-xl shadow-xl flex items-center gap-6 animate-in slide-in-from-top-4">
+          <span className="text-sm font-bold">{selectedIds.size} Selected</span>
+          <div className="h-4 w-px bg-slate-700"></div>
+          <div className="flex gap-2">
+            <button 
+              onClick={handleEmailClick}
+              className="flex items-center gap-2 px-3 py-1.5 hover:bg-slate-800 rounded-lg text-xs font-medium transition-colors"
+            >
+              <Mail size={14}/> Email
+            </button>
+            <button onClick={handleBatchDelete} className="flex items-center gap-2 px-3 py-1.5 hover:bg-slate-800 rounded-lg text-xs font-medium transition-colors">
+              <Archive size={14}/> Archive
+            </button>
+          </div>
+          <button onClick={clearSelection} className="ml-2 hover:text-gray-300"><X size={16}/></button>
+        </div>
+      )}
 
       {/* CONTEXT MENU */}
       {contextMenu && (
@@ -135,25 +302,22 @@ export default function TalentPage() {
           style={{ top: contextMenu.y, left: contextMenu.x }}
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="px-3 py-2 border-b border-gray-100 text-xs font-bold text-gray-400 uppercase tracking-wider">{selectedIds.size} Selected</div>
-          <button onClick={() => handleBatchAction("Moved")} className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-gray-700 hover:text-orange-600 flex items-center gap-2"><Briefcase size={14}/> Move Stage</button>
-          <button onClick={() => handleBatchAction("Emailed")} className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-gray-700 hover:text-blue-600 flex items-center gap-2"><Mail size={14}/> Send Email</button>
-          <div className="border-t border-gray-100 my-1"></div>
-          <button onClick={() => handleBatchAction("Deleted")} className="w-full text-left px-4 py-2 text-sm hover:bg-red-50 text-red-600 flex items-center gap-2"><Trash2 size={14}/> Delete</button>
-        </div>
-      )}
-
-      {/* BULK ACTIONS BAR */}
-      {selectedIds.size > 0 && (
-        <div className="absolute top-6 left-1/2 -translate-x-1/2 z-50 bg-gray-900 text-white px-6 py-3 rounded-xl shadow-xl flex items-center gap-6 animate-in slide-in-from-top-4">
-          <span className="text-sm font-bold">{selectedIds.size} Selected</span>
-          <div className="h-4 w-px bg-gray-700"></div>
-          <div className="flex gap-2">
-            <button className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-800 rounded-lg text-xs font-medium transition-colors"><Mail size={14}/> Email</button>
-            <button className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-800 rounded-lg text-xs font-medium transition-colors"><Briefcase size={14}/> Move</button>
-            <button onClick={() => handleBatchAction("Deleted")} className="flex items-center gap-2 px-3 py-1.5 hover:bg-red-900/50 text-red-400 hover:text-red-200 rounded-lg text-xs font-medium transition-colors"><Trash2 size={14}/> Delete</button>
+          <div className="px-3 py-2 border-b border-gray-100 text-xs font-bold text-gray-400 uppercase tracking-wider">
+            {selectedIds.size} Selected
           </div>
-          <button onClick={clearSelection} className="ml-2 hover:text-gray-300"><X size={16}/></button>
+          <button className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-gray-700 hover:text-orange-600 flex items-center gap-2">
+            <Briefcase size={14}/> Move Stage
+          </button>
+          <button 
+            onClick={handleEmailClick}
+            className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-gray-700 hover:text-blue-600 flex items-center gap-2"
+          >
+            <Mail size={14}/> Send Email
+          </button>
+          <div className="border-t border-gray-100 my-1"></div>
+          <button onClick={handleBatchDelete} className="w-full text-left px-4 py-2 text-sm hover:bg-red-50 text-red-600 flex items-center gap-2">
+            <Trash2 size={14}/> Delete
+          </button>
         </div>
       )}
 
@@ -165,10 +329,17 @@ export default function TalentPage() {
         setSearchQuery={setSearchQuery}
         filterStatus={filterStatus}
         setFilterStatus={setFilterStatus}
-        filterRole={filterRole}
-        setFilterRole={setFilterRole}
-        activePositions={activePositions}
-        onAddClick={() => setShowAddModal(true)}
+        filterOwner={filterOwner}
+        setFilterOwner={setFilterOwner}
+        savedFilters={savedFilters}
+        onSaveFilter={saveCurrentFilter}
+        onApplyFilter={applySavedFilter}
+        onShowViewManager={() => setShowViewManager(true)}
+        onAddClick={() => { 
+          setCandidateForm({}); 
+          setEditingCandidateId(null); 
+          setShowAddModal(true); 
+        }}
       />
 
       <div className="flex-1 w-full min-w-0 overflow-hidden relative">
@@ -184,10 +355,13 @@ export default function TalentPage() {
             onToggleAll={toggleAll}
             onOpenDrawer={setSelectedId}
             onContextMenu={(e, c) => {
-              e.preventDefault(); e.stopPropagation();
-              handleSelection(c.id, true); setIsSelectionMode(true);
+              e.preventDefault(); 
+              e.stopPropagation();
+              handleSelection(c.id, true); 
+              setIsSelectionMode(true);
               setContextMenu({ visible: true, x: e.clientX, y: e.clientY });
             }}
+            onRestore={handleRestore}
           />
         ) : (
           <TalentBoard 
@@ -204,9 +378,87 @@ export default function TalentPage() {
         onClose={() => setSelectedId(null)}
         currentTab={currentTab}
         onUpdate={fetchCandidates}
+        onEdit={openEditModal}
+        onEmail={handleEmailFromDrawer}
+        onDelete={(id) => {
+          if (confirm("Archive this candidate?")) {
+            supabase.from('candidates').update({ is_deleted: true }).eq('id', id).then(() => {
+              fetchCandidates();
+              setSelectedId(null);
+            });
+          }
+        }}
+        internalStaff={internalStaff}
       />
       
-      {selectedId && <div className="fixed inset-0 bg-gray-900/20 backdrop-blur-sm z-50 transition-opacity" onClick={() => setSelectedId(null)}></div>}
+      {selectedId && (
+        <div 
+          className="fixed inset-0 bg-slate-900/20 backdrop-blur-sm z-50 transition-opacity" 
+          onClick={() => setSelectedId(null)}
+        ></div>
+      )}
+
+      {showAddModal && (
+        <AddCandidateModal 
+          onClose={() => setShowAddModal(false)} 
+          onSuccess={fetchCandidates} 
+        />
+      )}
+
+      {/* EMAIL MODAL */}
+      {showEmailModal && (
+        <EmailModal
+          isOpen={showEmailModal}
+          candidates={selectedCandidates}
+          onClose={() => {
+            setShowEmailModal(false);
+            clearSelection();
+          }}
+          onSend={() => {
+            fetchCandidates();
+          }}
+        />
+      )}
+
+      {/* VIEW MANAGER MODAL */}
+      {showViewManager && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[80] p-4" onClick={() => setShowViewManager(false)}>
+          <div className="bg-white p-6 rounded-xl w-full max-w-sm shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-bold text-gray-900">Manage Saved Views</h3>
+              <button onClick={() => setShowViewManager(false)}><X size={18} className="text-slate-400"/></button>
+            </div>
+            <div className="space-y-2">
+              {savedFilters.length === 0 && <p className="text-sm text-slate-400 italic">No saved views.</p>}
+              {savedFilters.map(filter => (
+                <div key={filter.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200">
+                  <div>
+                    <p className="text-sm font-bold text-gray-800">{filter.name}</p>
+                    <p className="text-xs text-slate-500">{filter.status} • {filter.owner}</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => {
+                        const newName = prompt("Rename view:", filter.name);
+                        if (newName) renameSavedFilter(filter.id, newName);
+                      }} 
+                      className="p-1.5 hover:bg-white rounded text-slate-500 hover:text-blue-600 transition"
+                    >
+                      <Pencil size={14}/>
+                    </button>
+                    <button 
+                      onClick={() => deleteSavedFilter(filter.id)} 
+                      className="p-1.5 hover:bg-white rounded text-slate-500 hover:text-red-600 transition"
+                    >
+                      <Trash2 size={14}/>
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

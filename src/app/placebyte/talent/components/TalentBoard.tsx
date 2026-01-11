@@ -1,6 +1,6 @@
 import React from 'react';
 import { Candidate } from "@/types";
-import { Zap } from "lucide-react";
+import { Zap, Clock } from "lucide-react";
 
 interface TalentBoardProps {
   candidates: Candidate[];
@@ -9,32 +9,53 @@ interface TalentBoardProps {
 }
 
 export default function TalentBoard({ candidates, selectedId, onOpenDrawer }: TalentBoardProps) {
+  
+  const getDaysSince = (dateStr: string) => {
+    if (!dateStr) return 0;
+    const diff = new Date().getTime() - new Date(dateStr).getTime();
+    return Math.floor(diff / (1000 * 3600 * 24));
+  };
+
   return (
     <div className="h-full w-full overflow-x-auto overflow-y-hidden p-8">
       <div className="flex gap-6 h-full min-w-max"> 
         {['New', 'Screening', 'Interview', 'Offer'].map(stage => (
-          <div key={stage} className="w-[350px] flex-shrink-0 flex flex-col h-full bg-gray-50/50 rounded-xl">
-            <div className="flex justify-between items-center mb-3 px-1 flex-shrink-0">
-              <h3 className="font-bold text-gray-700 text-sm flex items-center gap-2">
-                <div className={`w-2 h-2 rounded-full ${stage === 'Placed' ? 'bg-green-500' : 'bg-blue-500'}`}></div>{stage}
+          <div key={stage} className="w-[320px] flex-shrink-0 flex flex-col h-full bg-slate-100/50 rounded-xl border border-slate-200/60">
+            <div className="flex justify-between items-center mb-3 px-4 pt-4 flex-shrink-0">
+              <h3 className="font-bold text-slate-700 text-sm flex items-center gap-2">
+                <div className={`w-2 h-2 rounded-full ${stage === 'Offer' ? 'bg-pink-500' : 'bg-blue-500'}`}></div>{stage}
               </h3>
-              <span className="text-xs text-gray-500 bg-white border border-gray-200 px-2 py-0.5 rounded-full shadow-sm">{candidates.filter(c => c.status === stage).length}</span>
+              <span className="text-xs text-slate-500 font-bold">{candidates.filter(c => c.status === stage).length}</span>
             </div>
-            <div className="flex-1 overflow-y-auto custom-scrollbar p-1 space-y-3 pb-8">
-              {candidates.filter(c => c.status === stage).map(c => (
-                <div key={c.id} onClick={() => onOpenDrawer(c.id)} className={`bg-white p-4 rounded-xl shadow-sm border border-gray-200 cursor-pointer hover:shadow-md transition-all hover:border-blue-300 group ${selectedId === c.id ? 'ring-2 ring-blue-500 border-transparent' : ''}`}>
-                  <div className="flex justify-between items-start mb-2">
-                     <div className="flex items-center gap-2"><div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${c.avatar_color || 'bg-gray-100'}`}>{c.name?.charAt(0)}</div><div className="font-bold text-sm text-gray-900">{c.name}</div></div>
-                     {c.match_score > 90 && <Zap size={12} className="text-green-500 fill-green-500" />}
+            <div className="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-3 pb-8">
+              {candidates.filter(c => c.status === stage).map(c => {
+                const daysSince = getDaysSince((c as any).last_contacted_at || c.last_active);
+                
+                return (
+                  <div 
+                    key={c.id} 
+                    onClick={() => onOpenDrawer(c.id)} 
+                    className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 cursor-pointer hover:shadow-md hover:border-blue-300 transition-all group"
+                  >
+                    <div className="flex justify-between items-start mb-2">
+                       <div className="font-bold text-sm text-gray-900">{c.name}</div>
+                       {c.match_score > 80 && <Zap size={12} className="text-amber-500 fill-amber-500" />}
+                    </div>
+                    <p className="text-xs text-slate-500 mb-3">{c.role}</p>
+                    
+                    {(c as any).next_action && (
+                        <div className="bg-blue-50 text-blue-700 px-2 py-1.5 rounded text-[10px] font-medium flex items-center gap-1 mb-3">
+                            <Clock size={10}/> {(c as any).next_action}
+                        </div>
+                    )}
+
+                    <div className="flex justify-between items-center pt-2 border-t border-slate-50">
+                        <span className="text-[10px] text-slate-400">{daysSince}d ago</span>
+                        <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[8px] font-bold ${c.avatar_color || 'bg-blue-100 text-blue-700'}`}>{c.name?.charAt(0) || '?'}</div>
+                    </div>
                   </div>
-                  <p className="text-xs text-gray-500 mb-3 pl-8">{c.role}</p>
-                  <div className="flex flex-wrap gap-1 pl-8">
-                    {/* FIXED: Added null check for skills array */}
-                    {(c.skills || []).slice(0, 2).map(skill => <span key={skill} className="text-[10px] px-1.5 py-0.5 bg-gray-50 border border-gray-100 text-gray-600 rounded">{skill}</span>)}
-                    {(c.skills || []).length > 2 && <span className="text-[10px] text-gray-400">+{c.skills.length - 2}</span>}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         ))}
