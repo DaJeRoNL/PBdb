@@ -11,7 +11,9 @@ import TalentList from "./components/TalentList";
 import TalentBoard from "./components/TalentBoard";
 import TalentDrawer from "./components/TalentDrawer";
 import AddCandidateModal from "./components/AddCandidateModal";
+import EditCandidateModal from "./components/EditCandidateModal"; 
 import EmailModal from "./components/EmailModal";
+import PlacementsHub from "../placements/PlacementsHub"; 
 
 // Helper function for avatar colors
 const getColorFromStr = (str: string) => {
@@ -42,8 +44,10 @@ export default function TalentPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showViewManager, setShowViewManager] = useState(false);
   const [showEmailModal, setShowEmailModal] = useState(false);
-  const [editingCandidateId, setEditingCandidateId] = useState<string | null>(null);
-  const [candidateForm, setCandidateForm] = useState<any>({});
+  
+  // Edit Modal State
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [candidateToEdit, setCandidateToEdit] = useState<Candidate | null>(null);
 
   // Filter State
   const [searchQuery, setSearchQuery] = useState("");
@@ -123,12 +127,19 @@ export default function TalentPage() {
     }
   };
 
+  // --- MOVED UP: MEMOS MUST RUN BEFORE ANY RETURNS ---
+  
   const filteredCandidates = useMemo(() => {
+    // Optimization: Don't filter if we aren't displaying them
+    if (currentTab === 'placements') return [];
+
     return candidates.filter(c => {
-      if (currentTab === 'placements' && c.status !== 'Placed') return false;
+      // Archive View
       if (currentTab === 'archive') {
         if (!(c as any).is_deleted && c.status !== 'Rejected') return false;
-      } else {
+      } 
+      // Active View
+      else {
         if ((c as any).is_deleted) return false;
         if (c.status === 'Rejected' || c.status === 'Placed') return false;
       }
@@ -155,6 +166,13 @@ export default function TalentPage() {
     candidates.filter(c => selectedIds.has(c.id)),
     [candidates, selectedIds]
   );
+
+  // --- END MEMOS ---
+
+  // ✅ NOW WE CAN RETURN EARLY FOR PLACEMENTS
+  if (currentTab === 'placements') {
+    return <PlacementsHub />;
+  }
 
   const clearSelection = () => {
     setSelectedIds(new Set());
@@ -210,23 +228,8 @@ export default function TalentPage() {
   };
 
   const openEditModal = (candidate: Candidate) => {
-    const c = candidate as any;
-    setCandidateForm({
-      name: c.name, 
-      email: c.email || "", 
-      role: c.role, 
-      status: c.status,
-      owner_id: c.owner_id || "", 
-      salary_expectations: c.salary_expectations || 0,
-      location: c.location || "", 
-      notice_period: c.notice_period || "", 
-      linkedin: c.linkedin || "",
-      notes: "", 
-      next_action: c.next_action || "", 
-      next_action_date: c.next_action_date || ""
-    });
-    setEditingCandidateId(c.id);
-    setShowAddModal(true);
+    setCandidateToEdit(candidate);
+    setShowEditModal(true);
   };
 
   const handleEmailClick = () => {
@@ -335,11 +338,7 @@ export default function TalentPage() {
         onSaveFilter={saveCurrentFilter}
         onApplyFilter={applySavedFilter}
         onShowViewManager={() => setShowViewManager(true)}
-        onAddClick={() => { 
-          setCandidateForm({}); 
-          setEditingCandidateId(null); 
-          setShowAddModal(true); 
-        }}
+        onAddClick={() => setShowAddModal(true)}
       />
 
       <div className="flex-1 w-full min-w-0 overflow-hidden relative">
@@ -402,6 +401,20 @@ export default function TalentPage() {
         <AddCandidateModal 
           onClose={() => setShowAddModal(false)} 
           onSuccess={fetchCandidates} 
+        />
+      )}
+
+      {/* EDIT MODAL */}
+      {showEditModal && candidateToEdit && (
+        <EditCandidateModal 
+          candidate={candidateToEdit}
+          isOpen={showEditModal}
+          onClose={() => {
+            setShowEditModal(false);
+            setCandidateToEdit(null);
+          }}
+          onSuccess={fetchCandidates}
+          internalStaff={internalStaff}
         />
       )}
 

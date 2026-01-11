@@ -5,7 +5,7 @@ import { Plus, Briefcase, Building2, MapPin, DollarSign, Users, Calendar, AlertC
 
 interface Position {
   id: string;
-  company_id: string;
+  client_id: string;
   title: string;
   department: string;
   location: string;
@@ -21,7 +21,7 @@ interface Position {
   owner_id: string;
   target_fill_date: string;
   created_at: string;
-  company?: { name: string };
+  client?: { name: string };
   owner?: { email: string };
   submission_count?: number;
   shortlist_count?: number;
@@ -49,7 +49,7 @@ export default function PositionsPage() {
       .from('positions')
       .select(`
         *,
-        company:companies(name),
+        client:clients(name),
         owner:profiles(email)
       `)
       .eq('is_deleted', false)
@@ -88,7 +88,7 @@ export default function PositionsPage() {
       filtered = filtered.filter(p => 
         p.title.toLowerCase().includes(query) ||
         p.department?.toLowerCase().includes(query) ||
-        p.company?.name.toLowerCase().includes(query)
+        p.client?.name.toLowerCase().includes(query)
       );
     }
 
@@ -157,7 +157,7 @@ export default function PositionsPage() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20}/>
             <input
               type="text"
-              placeholder="Search positions, companies, departments..."
+              placeholder="Search positions, clients, departments..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-10 pr-4 py-2.5 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-gray-900"
@@ -205,7 +205,7 @@ export default function PositionsPage() {
                   <h3 className="text-lg font-bold text-gray-900 mb-1">{position.title}</h3>
                   <p className="text-sm text-slate-600 flex items-center gap-1">
                     <Building2 size={14}/>
-                    {position.company?.name}
+                    {position.client?.name}
                   </p>
                 </div>
                 <span className={`text-xs font-bold px-2 py-1 rounded border ${getPriorityColor(position.priority)}`}>

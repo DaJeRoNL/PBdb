@@ -11,7 +11,7 @@ interface SubmissionTrackerProps {
 interface Position {
   id: string;
   title: string;
-  company: { id: string; name: string };
+  client: { id: string; name: string };
 }
 
 interface Submission {
@@ -40,14 +40,14 @@ export default function SubmissionTracker({ candidate, onClose }: SubmissionTrac
   const fetchPositions = async () => {
     const { data } = await supabase
       .from('positions')
-      .select('id, title, company:companies(name)')
+      .select('id, title, client:clients(name)')
       .eq('status', 'Open')
       .eq('is_deleted', false);
     
     if (data) {
       const mappedData = data.map((item: any) => ({
         ...item,
-        company: Array.isArray(item.company) ? item.company[0] : item.company
+        client: Array.isArray(item.client) ? item.client[0] : item.client
       }));
       setPositions(mappedData as Position[]);
     }
@@ -64,7 +64,7 @@ export default function SubmissionTracker({ candidate, onClose }: SubmissionTrac
         is_shortlisted,
         feedback,
         time_in_current_stage,
-        position:positions(id, title, company:companies(name))
+        position:positions(id, title, client:clients(name))
       `)
       .eq('candidate_id', candidate.id);
     
@@ -93,7 +93,7 @@ export default function SubmissionTracker({ candidate, onClose }: SubmissionTrac
     const { error } = await supabase.from('client_submissions').insert([{
       candidate_id: candidate.id,
       position_id: selectedPosition,
-      company_id: position.company.id,
+      client_id: position.client.id,
       submitted_by: session?.user?.id,
       status: 'Submitted',
       stage: 'Initial Review',
@@ -105,7 +105,7 @@ export default function SubmissionTracker({ candidate, onClose }: SubmissionTrac
       await supabase.from('candidate_activity').insert([{
         candidate_id: candidate.id,
         action_type: 'Submitted to Client',
-        description: `Submitted for ${position.title} at ${position.company.name}`,
+        description: `Submitted for ${position.title} at ${position.client.name}`,
         author_id: session?.user?.id
       }]);
 
@@ -177,7 +177,7 @@ export default function SubmissionTracker({ candidate, onClose }: SubmissionTrac
                   <option value="">Choose a position...</option>
                   {positions.map(pos => (
                     <option key={pos.id} value={pos.id}>
-                      {pos.title} - {pos.company.name}
+                      {pos.title} - {pos.client.name}
                     </option>
                   ))}
                 </select>
@@ -224,7 +224,7 @@ export default function SubmissionTracker({ candidate, onClose }: SubmissionTrac
                       <div className="flex justify-between items-start mb-4">
                         <div className="flex-1">
                           <h4 className="text-lg font-bold text-gray-900">{sub.position.title}</h4>
-                          <p className="text-sm text-slate-600">{sub.position.company.name}</p>
+                          <p className="text-sm text-slate-600">{sub.position.client.name}</p>
                           <p className="text-xs text-slate-400 mt-1">
                             Submitted {new Date(sub.submitted_at).toLocaleDateString()}
                           </p>

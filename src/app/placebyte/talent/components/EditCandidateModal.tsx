@@ -55,9 +55,15 @@ export default function EditCandidateModal({
     e.preventDefault();
     setSaving(true);
 
+    // FIX: Convert empty strings to null for UUID fields
+    const updates = {
+      ...formData,
+      owner_id: formData.owner_id || null, 
+    };
+
     const { error } = await supabase
       .from('candidates')
-      .update(formData)
+      .update(updates)
       .eq('id', candidate.id);
 
     if (error) {
@@ -70,7 +76,8 @@ export default function EditCandidateModal({
     await supabase.from('candidate_activity').insert([{
       candidate_id: candidate.id,
       action_type: 'Profile Updated',
-      description: 'Candidate profile was edited'
+      description: 'Candidate profile was edited',
+      author_id: (await supabase.auth.getSession()).data.session?.user?.id
     }]);
 
     setSaving(false);
