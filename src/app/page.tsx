@@ -39,28 +39,37 @@ export default function Home() {
   // Auth Check
   useEffect(() => {
     const checkAuth = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      if (session?.user) {
-        setSession(session);
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession();
         
-        // Check if user has profile (authorized)
-        const { data: profile, error } = await supabase
-          .from('profiles')
-          .select('role')
-          .eq('id', session.user.id)
-          .single();
-
-        if (profile && !error) {
-          setIsAuthorized(true);
-          // REMOVED: Auto-redirect logic was here
-        } else {
-          setIsAuthorized(false);
+        if (error) {
+           console.error("Auth check failed:", error);
+           // Optional: setLoading(false) here or let it fall through
         }
-      } else {
-        setSession(null);
+
+        if (session?.user) {
+          setSession(session);
+          
+          // Check if user has profile (authorized)
+          const { data: profile, error: profileError } = await supabase
+            .from('profiles')
+            .select('role')
+            .eq('id', session.user.id)
+            .single();
+
+          if (profile && !profileError) {
+            setIsAuthorized(true);
+          } else {
+            setIsAuthorized(false);
+          }
+        } else {
+          setSession(null);
+        }
+      } catch (err) {
+        console.error("Unexpected auth error:", err);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     };
 
     checkAuth();
@@ -104,9 +113,6 @@ export default function Home() {
 
     return () => subscription.unsubscribe();
   }, [router]);
-
-  // ... (Rest of the file remains exactly the same: handleGoogleLogin, handleMagicLink, handleLogout, render)
-  // Re-paste the rest of your functions below to complete the file:
 
   const handleGoogleLogin = async () => {
     if (!captchaToken) {
@@ -215,7 +221,7 @@ export default function Home() {
                 disabled={magicLinkLoading || !captchaToken}
                 className="w-full bg-gray-900 hover:bg-gray-800 text-white font-bold py-3 px-4 rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {magicLinkLoading ? "Sending..." : "Email Me a Login Link"}
+                {magicLinkLoading ? "Sending..." : "Email a Login Link"}
               </button>
             </form>
           ) : (
