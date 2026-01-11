@@ -1,6 +1,8 @@
 "use client";
+import React from 'react';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
+import Sidebar from '@/components/Sidebar';
 
 export default function PlacebyteShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -26,50 +28,53 @@ export default function PlacebyteShell({ children }: { children: React.ReactNode
     : "flex-1 overflow-auto p-8 min-w-0"; // Standard scroll for others
 
   return (
-    <div className="flex-1 ml-64 flex flex-col h-full min-w-0">
-      
-      {/* Sticky Header */}
-      <header className="bg-white border-b border-gray-200 px-8 py-4 flex justify-between items-center z-40 shadow-sm min-h-[73px] flex-shrink-0">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Placebyte CRM</h1>
-          <p className="text-sm text-gray-500">Business Development & Client Portals</p>
-        </div>
+    <div className="flex h-screen bg-gray-50 overflow-hidden">
+      <Sidebar />
+      <div className="flex-1 ml-64 flex flex-col h-full min-w-0">
         
-        {/* LEADS / ACCOUNTS / PORTALS TABS */}
-        {(isLeads || isAccounts || isPortals) && (
-          <div className="flex bg-gray-100 p-1 rounded-lg">
-            <Link href="/placebyte/leads" className={tabClass(isLeads)}>
-              Pipeline
-            </Link>
-            <Link href="/placebyte/accounts" className={tabClass(isAccounts)}>
-              Won Accounts
-            </Link>
-            <Link href="/placebyte/portals" className={tabClass(isPortals)}>
-              Client Portals
-            </Link>
+        {/* Sticky Header */}
+        <header className="bg-white border-b border-gray-200 px-8 py-4 flex justify-between items-center z-40 shadow-sm min-h-[73px] flex-shrink-0">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Placebyte CRM</h1>
+            <p className="text-sm text-gray-500">Business Development & Client Portals</p>
           </div>
-        )}
+          
+          {/* LEADS / ACCOUNTS / PORTALS TABS */}
+          {(isLeads || isAccounts || isPortals) && (
+            <div className="flex bg-gray-100 p-1 rounded-lg">
+              <Link href="/placebyte/leads" className={tabClass(isLeads)}>
+                Pipeline
+              </Link>
+              <Link href="/placebyte/accounts" className={tabClass(isAccounts)}>
+                Won Accounts
+              </Link>
+              <Link href="/placebyte/portals" className={tabClass(isPortals)}>
+                Client Portals
+              </Link>
+            </div>
+          )}
 
-        {/* TALENT TABS */}
-        {isTalent && (
-          <div className="flex bg-gray-100 p-1 rounded-lg">
-            <Link href="/placebyte/talent?view=active" className={tabClass(currentView === 'active')}>
-              Active Pool
-            </Link>
-            <Link href="/placebyte/talent?view=placements" className={tabClass(currentView === 'placements')}>
-              Placements
-            </Link>
-            <Link href="/placebyte/talent?view=archive" className={tabClass(currentView === 'archive')}>
-              Archive
-            </Link>
-          </div>
-        )}
-      </header>
-      
-      {/* Main Content */}
-      <main className={mainWrapperClass}>
-        {children}
-      </main>
+          {/* TALENT TABS */}
+          {isTalent && (
+            <div className="flex bg-gray-100 p-1 rounded-lg">
+              <Link href="/placebyte/talent?view=active" className={tabClass(currentView === 'active')}>
+                Active Pool
+              </Link>
+              <Link href="/placebyte/talent?view=placements" className={tabClass(currentView === 'placements')}>
+                Placements
+              </Link>
+              <Link href="/placebyte/talent?view=archive" className={tabClass(currentView === 'archive')}>
+                Archive
+              </Link>
+            </div>
+          )}
+        </header>
+        
+        {/* Main Content */}
+        <main className={mainWrapperClass}>
+          {children}
+        </main>
+      </div>
     </div>
   );
 }
