@@ -9,9 +9,9 @@ const TRACKING_PIXEL = Buffer.from(
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { trackingId: string } }
+  { params }: { params: Promise<{ trackingId: string }> }
 ) {
-  const { trackingId } = params;
+  const { trackingId } = await params;
 
   try {
     const supabase = await createClient();
