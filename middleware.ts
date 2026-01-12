@@ -48,9 +48,7 @@ export async function middleware(request: NextRequest) {
         return new NextResponse(
           JSON.stringify({
             error: 'Access Denied',
-            message: 'Geographic restriction: Access is only allowed from authorized regions.',
-            blocked_country: country,
-            blocked_ip: ip,
+            message: 'Access is only allowed from authorized regions.',
             support: 'If you believe this is an error, contact your system administrator.'
           }),
           {
@@ -165,7 +163,22 @@ export async function middleware(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
 
   // 6. Redirect Logic
-  if (!user && request.nextUrl.pathname !== '/' && !request.nextUrl.pathname.startsWith('/auth')) {
+  const isApiRoute = request.nextUrl.pathname.startsWith('/api');
+  const isAuthRoute = request.nextUrl.pathname.startsWith('/auth');
+  const isPublicRoute = request.nextUrl.pathname === '/';
+
+  // If NO USER and trying to access protected route
+  if (!user && !isPublicRoute && !isAuthRoute) {
+    
+    // Case A: It's an API Call -> Return JSON 401
+    if (isApiRoute) {
+       return new NextResponse(JSON.stringify({ error: 'Unauthorized' }), { 
+         status: 401, 
+         headers: { 'Content-Type': 'application/json' } 
+       });
+    }
+
+    // Case B: It's a Page Visit -> Redirect to Login
     const redirectUrl = new URL('/', request.url);
     return NextResponse.redirect(redirectUrl);
   }

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Candidate } from "@/types";
 import { X, Edit3, Trash2, Save, Calendar, Linkedin, ExternalLink, 
-         ArrowRightLeft, Check, Copy, FileText, Upload } from "lucide-react";
+         ArrowRightLeft, Check, Copy, FileText, Upload, Clock, MapPin, DollarSign, User, Mail, Phone, Eye } from "lucide-react";
 import { StatusBadge } from "./StatusBadge";
 import { supabase } from "@/lib/supabaseClient";
 
@@ -53,6 +53,8 @@ export default function TalentDrawer({
       setSidebarDirty(false);
       setNameCopied(false);
       fetchLogs(candidate.id);
+      // Reset views when switching candidates
+      setShowViewer(false); 
     }
   }, [candidate]);
 
@@ -77,6 +79,9 @@ export default function TalentDrawer({
       next_action: sidebarData.next_action,
       next_action_date: sidebarData.next_action_date || null,
       notice_period: sidebarData.notice_period,
+      location: sidebarData.location,
+      country_emoji: sidebarData.country_emoji,
+      summary: sidebarData.summary,
       owner_id: sidebarData.owner_id || null,
       linkedin: sidebarData.linkedin || null
     };
@@ -101,8 +106,6 @@ export default function TalentDrawer({
 
   const handleAddNote = async () => {
     if (!noteContent.trim() || !sidebarData) return;
-    
-    // 1. Insert the Note Activity
     const { error } = await supabase.from('candidate_activity').insert([{
       candidate_id: sidebarData.id, 
       action_type: 'Note', 
@@ -111,15 +114,11 @@ export default function TalentDrawer({
     }]);
 
     if (!error) { 
-      // 2. Detect Mentions & Create Notifications
       const notificationsToInsert: any[] = [];
-      
       internalStaff.forEach(staff => {
         if (!staff.email) return;
-        
         const handle = `@${staff.email.split('@')[0]}`;
         const regex = new RegExp(`${handle}\\b`, 'i');
-        
         if (regex.test(noteContent)) {
           notificationsToInsert.push({
             user_id: staff.id,
@@ -132,12 +131,9 @@ export default function TalentDrawer({
           });
         }
       });
-
       if (notificationsToInsert.length > 0) {
-        const { error: notifError } = await supabase.from('notifications').insert(notificationsToInsert);
-        if (notifError) console.error("Notification Error:", notifError);
+        await supabase.from('notifications').insert(notificationsToInsert);
       }
-
       setNoteContent(""); 
       fetchLogs(sidebarData.id); 
     }
@@ -152,182 +148,266 @@ export default function TalentDrawer({
 
   const handleParseComplete = async (parsedData: any) => {
     await logActivity(sidebarData.id, 'Resume Parsed', 'Updated profile with new resume data');
-    setSidebarData((prev: any) => ({ ...prev, ...parsedData }));
+    setSidebarData((prev: any) => ({ 
+        ...prev, 
+        ...parsedData,
+        location: parsedData.location || prev.location,
+        country_emoji: parsedData.country_emoji || prev.country_emoji,
+        summary: parsedData.summary || prev.summary 
+    }));
     onUpdate();
   };
 
   const handleResumeUpdate = async (url: string, fileId?: string) => {
     try {
-      // 1. Update Candidate Record
-      const { error } = await supabase.from('candidates').update({ 
-        resume_url: url 
-      }).eq('id', sidebarData.id);
-
-      if (error) {
-        // Check for specific constraint error
-        if (error.message && (error.message.includes('valid_entity_type') || error.message.includes('valid_action_type'))) {
-           console.error("DB Constraint Error: The database trigger 'action_history' is blocking this update. Run the migration script to fix.");
-           alert("System Error: Database constraint 'valid_entity_type' blocked this update. Please contact admin to run migration.");
-        }
-        throw error;
-      }
-
+      const { error } = await supabase.from('candidates').update({ resume_url: url }).eq('id', sidebarData.id);
+      if (error) throw error;
       setSidebarData((prev: any) => ({ ...prev, resume_url: url }));
-      
-      // 2. Also log as document if fileId provided
       if (fileId) {
         try {
             await supabase.from('candidate_documents').insert([{
-            candidate_id: sidebarData.id,
-            file_id: fileId,
-            file_url: url,
-            document_type: 'resume',
-            file_name: 'Attached via Viewer',
-            parsing_status: 'completed'
+            candidate_id: sidebarData.id, file_id: fileId, file_url: url, document_type: 'resume', file_name: 'Attached via Viewer', parsing_status: 'completed'
             }]);
-        } catch (docError) {
-            console.warn("Could not log document record (non-critical):", docError);
-        }
+        } catch (e) {}
       }
-
       await logActivity(sidebarData.id, 'Resume Attached', 'Manual attachment via viewer');
       onUpdate();
     } catch (error: any) {
-      // Safe error logging
-      const msg = error?.message || (typeof error === 'object' ? JSON.stringify(error) : String(error));
-      console.error("Failed to save resume URL:", msg);
-      
-      if (msg.includes('action_history')) {
-          console.warn("Action history logging failed, but resume might be saved.");
-          setSidebarData((prev: any) => ({ ...prev, resume_url: url }));
-      } else {
-          throw error;
-      }
+      console.error("Failed to save resume URL:", error);
+      setSidebarData((prev: any) => ({ ...prev, resume_url: url }));
     }
   };
 
   if (!isOpen || !sidebarData) return null;
 
   return (
-    <div className="fixed top-0 right-0 h-full w-[500px] bg-white shadow-2xl border-l border-gray-200 transform transition-transform duration-300 z-[60] flex flex-col">
+    <div className="fixed top-0 right-0 h-full w-[800px] bg-white shadow-2xl border-l border-gray-200 transform transition-transform duration-300 z-[60] flex flex-col">
       
-      {/* Header */}
-      <div className="px-6 py-6 border-b border-gray-100 flex justify-between items-start bg-slate-50/50">
-        <div className="flex gap-4">
-          <div className={`w-14 h-14 rounded-xl flex items-center justify-center font-bold text-xl shadow-sm ${sidebarData.avatar_color || 'bg-blue-100 text-blue-700'}`}>
+      {/* === HEADER === */}
+      <div className="px-8 py-5 border-b border-gray-100 flex justify-between items-center bg-white z-10">
+        <div className="flex gap-4 w-full">
+          <div className={`w-16 h-16 rounded-2xl flex items-center justify-center font-bold text-2xl shadow-sm flex-shrink-0 ${sidebarData.avatar_color || 'bg-blue-100 text-blue-700'}`}>
             {sidebarData.name?.charAt(0) || '?'}
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 onClick={handleCopyName} className="text-xl font-bold text-gray-900 cursor-pointer hover:text-blue-600 transition flex items-center gap-2">
-                {sidebarData.name}
-                {nameCopied ? <Check size={16} className="text-green-600"/> : <Copy size={16} className="text-gray-400 hover:text-blue-600"/>}
-              </h2>
+          <div className="flex-1 min-w-0 flex justify-between">
+            <div>
+                 <div className="flex items-center gap-3">
+                    <h2 onClick={handleCopyName} className="text-2xl font-bold text-gray-900 cursor-pointer hover:text-blue-600 transition flex items-center gap-2 truncate">
+                        {sidebarData.name}
+                        {nameCopied ? <Check size={18} className="text-green-600"/> : <Copy size={18} className="text-gray-400 hover:text-blue-600"/>}
+                    </h2>
+                    {sidebarData.linkedin && <a href={sidebarData.linkedin} target="_blank" className="text-[#0077b5] hover:opacity-80"><Linkedin size={20} /></a>}
+                </div>
+                <div className="flex items-center gap-3 mt-1">
+                    <p className="text-sm text-slate-500 font-medium truncate">{sidebarData.role}</p>
+                    <StatusBadge status={sidebarData.status} />
+                </div>
             </div>
-            <p className="text-sm text-slate-500">{sidebarData.role}</p>
-            <div className="flex items-center gap-2 mt-2">
-              <StatusBadge status={sidebarData.status} />
-              {sidebarData.linkedin && <a href={sidebarData.linkedin} target="_blank" className="text-blue-600 hover:text-blue-800 ml-1"><Linkedin size={16} /></a>}
+
+            {/* Header Actions */}
+            <div className="flex items-center gap-3">
+                 {/* ✅ Toggle Resume Viewer Button */}
+                 <button 
+                    onClick={() => setShowViewer(!showViewer)}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition shadow-sm ${
+                        showViewer 
+                        ? 'bg-gray-100 text-gray-700 border border-gray-300 hover:bg-gray-200' 
+                        : 'bg-slate-900 text-white hover:bg-slate-800'
+                    }`}
+                 >
+                    {showViewer ? <X size={16}/> : <FileText size={16} />} 
+                    {showViewer ? 'Close Resume' : 'View Resume'}
+                 </button>
+                 
+                 <div className="h-8 w-px bg-gray-200 mx-1"></div>
+                 <button onClick={() => { if(sidebarDirty) saveSidebarChanges(); onClose(); }} className="text-slate-400 hover:text-gray-600"><X size={24}/></button>
             </div>
           </div>
         </div>
-        <button onClick={() => { if(sidebarDirty) saveSidebarChanges(); onClose(); }} className="text-slate-400 hover:text-gray-600"><X size={20}/></button>
       </div>
 
-      {/* Quick Actions */}
-      <div className="px-6 py-3 border-b border-gray-100 flex flex-wrap gap-2">
-        <button onClick={() => onEmail && onEmail(sidebarData)} className="flex-1 bg-blue-600 text-white py-2 rounded-lg text-sm font-bold hover:bg-blue-700 transition">Email</button>
-        <button onClick={() => onEdit && onEdit(sidebarData)} className="flex-1 bg-white border border-gray-300 text-gray-700 py-2 rounded-lg text-sm font-bold hover:bg-gray-50 transition flex items-center justify-center gap-2"><Edit3 size={14}/> Edit</button>
-        <button onClick={() => setShowHandoff(true)} className="p-2 border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50" title="Handoff Ownership"><ArrowRightLeft size={18}/></button>
-        <button onClick={() => onDelete && onDelete(sidebarData.id)} className="p-2 border border-red-200 text-red-500 rounded-lg hover:bg-red-50"><Trash2 size={18}/></button>
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-6 space-y-8">
+      {/* === MAIN CONTENT (SPLIT VIEW) === */}
+      <div className="flex-1 flex overflow-hidden">
         
-        {/* Resume Actions */}
-        <div className="grid grid-cols-2 gap-3">
-          <button 
-            onClick={() => setShowParser(true)}
-            className="flex items-center justify-center gap-2 p-3 bg-purple-50 text-purple-700 border border-purple-200 rounded-lg text-sm font-bold hover:bg-purple-100 transition"
-          >
-            <Upload size={16} /> Parse Resume
-          </button>
-          <button 
-            onClick={() => setShowViewer(true)}
-            className="flex items-center justify-center gap-2 p-3 bg-gray-50 text-gray-700 border border-gray-200 rounded-lg text-sm font-bold hover:bg-gray-100 transition"
-          >
-            <FileText size={16} /> View Resume
-          </button>
-        </div>
+        {/* === LEFT COLUMN (Scrollable) === */}
+        <div className="w-[60%] overflow-y-auto custom-scrollbar p-8 border-r border-gray-100 pb-20">
+             
+             {/* Quick Actions */}
+             <div className="flex items-center gap-2 mb-8">
+                  {/* Email Button */}
+                  <button onClick={() => onEmail && onEmail(sidebarData)} className="flex-1 bg-blue-50 text-blue-700 py-2 rounded-lg text-sm font-bold hover:bg-blue-100 transition border border-blue-100">Email</button>
+                  <button onClick={() => onEdit && onEdit(sidebarData)} className="flex-1 bg-white border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-bold hover:bg-gray-50 transition flex items-center justify-center gap-2"><Edit3 size={14}/> Edit</button>
+                  <button onClick={() => setShowHandoff(true)} className="p-2 border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50" title="Handoff Ownership"><ArrowRightLeft size={18}/></button>
+                  <button onClick={() => onDelete && onDelete(sidebarData.id)} className="p-2 border border-red-200 text-red-500 rounded-lg hover:bg-red-50"><Trash2 size={18}/></button>
+             </div>
 
-        {/* Next Action */}
-        <div className="bg-yellow-50 p-4 rounded-xl border border-yellow-200">
-          <h3 className="text-xs font-bold text-yellow-900 uppercase tracking-wider mb-3">Next Action</h3>
-          <div className="space-y-3">
-            <input type="text" className="w-full p-2 text-sm border border-yellow-300 rounded bg-white text-gray-900" placeholder="e.g. Schedule Tech Test..." value={sidebarData.next_action || ''} onChange={(e) => handleSidebarInput('next_action', e.target.value)} />
-            <div className="flex items-center gap-2"><Calendar size={14} className="text-yellow-800"/><input type="date" className="p-2 text-sm border border-yellow-300 rounded bg-white flex-1 text-gray-900" value={sidebarData.next_action_date || ''} onChange={(e) => handleSidebarInput('next_action_date', e.target.value)} /></div>
-          </div>
-        </div>
+             <div className="space-y-8">
+                {/* Next Action */}
+                <div className="bg-yellow-50 p-5 rounded-xl border border-yellow-200 shadow-sm">
+                    <h3 className="text-xs font-bold text-yellow-900 uppercase tracking-wider mb-3 flex items-center gap-2">
+                        <Clock size={14} /> Next Action
+                    </h3>
+                    <div className="space-y-3">
+                        <input 
+                            type="text" 
+                            className="w-full p-2.5 text-sm border border-yellow-300 rounded-lg bg-white text-gray-900 focus:ring-2 focus:ring-yellow-200 focus:border-yellow-400 outline-none transition-all" 
+                            placeholder="e.g. Schedule Technical Test..." 
+                            value={sidebarData.next_action || ''} 
+                            onChange={(e) => handleSidebarInput('next_action', e.target.value)} 
+                        />
+                        <div className="flex items-center gap-2">
+                            <Calendar size={16} className="text-yellow-700"/>
+                            <input 
+                                type="date" 
+                                className="p-2 text-sm border border-yellow-300 rounded-lg bg-white flex-1 text-gray-900 focus:ring-2 focus:ring-yellow-200 outline-none" 
+                                value={sidebarData.next_action_date || ''} 
+                                onChange={(e) => handleSidebarInput('next_action_date', e.target.value)} 
+                            />
+                        </div>
+                    </div>
+                </div>
 
-        <FlagManager candidateId={sidebarData.id} />
+                {/* Candidate Info */}
+                <div>
+                    <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider mb-4 pb-2 border-b border-gray-100">Candidate Information</h3>
+                    <div className="grid grid-cols-2 gap-6">
+                        <div className="col-span-2">
+                            <label className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-1.5 mb-1"><MapPin size={10}/> Location</label>
+                            <div className="relative">
+                                {sidebarData.country_emoji && (
+                                    <span className="absolute left-0 top-1 text-lg pointer-events-none select-none">
+                                        {sidebarData.country_emoji}
+                                    </span>
+                                )}
+                                <input 
+                                    className={`w-full border-b border-gray-200 text-sm font-medium outline-none py-1 bg-transparent text-gray-900 focus:border-blue-500 transition-colors placeholder:text-gray-300 placeholder:font-normal ${sidebarData.country_emoji ? 'pl-7' : ''}`}
+                                    value={sidebarData.location || ''} 
+                                    onChange={(e) => handleSidebarInput('location', e.target.value)} 
+                                    placeholder="Add location..."
+                                />
+                            </div>
+                        </div>
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-1.5 mb-1"><Mail size={10}/> Email</label>
+                            <p className="text-sm font-medium text-blue-600 break-all select-all">{sidebarData.email || '-'}</p>
+                        </div>
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-1.5 mb-1"><Phone size={10}/> Phone</label>
+                            <p className="text-sm font-medium text-gray-900 select-all">{sidebarData.phone || '-'}</p>
+                        </div>
+                    </div>
+                </div>
 
-        {/* Candidate Details */}
-        <div>
-          <h3 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-3">Candidate Details</h3>
-          <div className="grid grid-cols-2 gap-4">
-            <div><label className="text-[10px] font-bold text-slate-600 uppercase">Email</label><p className="text-sm font-medium text-blue-600 break-all">{sidebarData.email || '-'}</p></div>
-            <div><label className="text-[10px] font-bold text-slate-600 uppercase">Phone</label><p className="text-sm font-medium text-gray-900">{sidebarData.phone || '-'}</p></div>
-            <div><label className="text-[10px] font-bold text-slate-600 uppercase">Location</label><p className="text-sm font-medium text-gray-900">{sidebarData.location || '-'}</p></div>
-            <div><label className="text-[10px] font-bold text-slate-600 uppercase">Expectation</label><p className="text-sm font-medium text-gray-900">${sidebarData.salary_expectations?.toLocaleString() || 0}</p></div>
-            <div><label className="text-[10px] font-bold text-slate-600 uppercase">Notice Period</label><input className="w-full mt-1 border-b border-gray-300 text-sm outline-none pb-1 bg-transparent text-gray-900" value={sidebarData.notice_period || ''} onChange={(e) => handleSidebarInput('notice_period', e.target.value)} /></div>
-            <div><label className="text-[10px] font-bold text-slate-600 uppercase">Recruiter</label><select className="w-full mt-1 border-b border-gray-300 text-sm bg-transparent outline-none pb-1 text-gray-900" value={sidebarData.owner_id || ''} onChange={(e) => handleSidebarInput('owner_id', e.target.value)}><option value="">Unassigned</option>{internalStaff.map(s => <option key={s.id} value={s.id}>{s.email}</option>)}</select></div>
-          </div>
-        </div>
+                {/* Professional Info */}
+                <div>
+                     <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider mb-4 pb-2 border-b border-gray-100">Professional Details</h3>
+                     <div className="grid grid-cols-2 gap-6">
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-1.5 mb-1"><DollarSign size={10}/> Salary</label>
+                            <p className="text-sm font-medium text-gray-900">${sidebarData.salary_expectations?.toLocaleString() || 0}</p>
+                        </div>
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-1.5 mb-1"><User size={10}/> Recruiter</label>
+                            <select className="w-full border-b border-gray-200 text-sm font-medium bg-transparent outline-none py-1 text-gray-900 focus:border-blue-500" value={sidebarData.owner_id || ''} onChange={(e) => handleSidebarInput('owner_id', e.target.value)}>
+                                <option value="">Unassigned</option>
+                                {internalStaff.map(s => <option key={s.id} value={s.id}>{s.email}</option>)}
+                            </select>
+                        </div>
+                        <div className="col-span-2">
+                            <label className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-1.5 mb-1"><Clock size={10}/> Notice Period</label>
+                            <input className="w-full border-b border-gray-200 text-sm font-medium outline-none py-1 bg-transparent text-gray-900 focus:border-blue-500 placeholder:text-gray-300 placeholder:font-normal" value={sidebarData.notice_period || ''} onChange={(e) => handleSidebarInput('notice_period', e.target.value)} placeholder="e.g. 2 Months / Immediate" />
+                        </div>
+                     </div>
+                </div>
 
-        {/* Pipeline Stage */}
-        <div>
-          <h3 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-3">Pipeline Stage</h3>
-          <div className="flex flex-wrap gap-2">
-            {['New', 'Screening', 'Interview', 'Offer', 'Placed', 'Rejected'].map(status => (
-              <button key={status} onClick={() => handleStatusChange(status)} className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${sidebarData.status === status ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-700 border-gray-300 hover:border-gray-400'}`}>{status}</button>
-            ))}
-          </div>
-        </div>
-
-        {/* Save Button */}
-        {sidebarDirty && (
-          <div className="sticky bottom-0 bg-white border-t border-gray-200 p-4 -mx-6 -mb-6 mt-4 flex justify-end animate-in slide-in-from-bottom-2">
-            <button onClick={saveSidebarChanges} className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg text-sm font-bold shadow-md flex items-center gap-2"><Save size={16}/> Save Changes</button>
-          </div>
-        )}
-
-        {/* Activity Log */}
-        <div className="border-t border-gray-100 pt-6">
-          <h3 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-4">Activity Log</h3>
-          <div className="bg-gray-50 p-3 rounded-xl border border-gray-200 mb-4">
-            <MentionInput 
-              value={noteContent}
-              onChange={setNoteContent}
-              placeholder="Add an internal note... Use @ to mention team"
-              className="w-full bg-transparent border-none text-sm focus:ring-0 resize-none placeholder:text-gray-400 text-gray-900"
-            />
-            <div className="flex justify-end mt-2 pt-2 border-t border-gray-200">
-              <button onClick={handleAddNote} disabled={!noteContent.trim()} className="bg-white border border-gray-300 px-3 py-1 rounded-md text-xs font-bold text-gray-700 hover:bg-gray-50 shadow-sm">Post Note</button>
+                {/* Summary */}
+                <div>
+                    <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider mb-3">Professional Summary</h3>
+                    <textarea 
+                        className="w-full p-4 border border-gray-200 rounded-xl text-sm text-gray-700 leading-relaxed focus:ring-2 focus:ring-blue-100 focus:border-blue-400 outline-none resize-none bg-slate-50 min-h-[160px]"
+                        placeholder="No summary available. Parse a resume to generate one using AI, or type manually here..."
+                        value={sidebarData.summary || ''}
+                        onChange={(e) => handleSidebarInput('summary', e.target.value)}
+                    />
+                </div>
             </div>
-          </div>
+        </div>
 
-          <div className="space-y-4 relative pl-4 border-l border-gray-200">
-            {logs.map(log => (
-              <div key={log.id} className="relative pl-4">
-                <div className="absolute left-[-21px] top-1.5 w-3 h-3 rounded-full bg-white border-2 border-slate-400"></div>
-                <p className="text-xs font-bold text-gray-900">{log.action_type}</p>
-                <p className="text-xs text-slate-600 mt-0.5">{log.description}</p>
-                <p className="text-[10px] text-slate-400 mt-1">{new Date(log.created_at).toLocaleDateString()} • {log.profiles?.email?.split('@')[0] || 'System'}</p>
-              </div>
-            ))}
-          </div>
+        {/* === RIGHT COLUMN (Fixed Layout / Flex Grow) === */}
+        <div className="w-[40%] flex flex-col bg-slate-50/50">
+            <div className="p-6 border-b border-gray-100 bg-white">
+                <button 
+                    onClick={() => setShowParser(true)}
+                    className="w-full flex items-center justify-center gap-2 p-3 bg-purple-50 text-purple-700 border border-purple-200 rounded-xl text-sm font-bold hover:bg-purple-100 transition mb-6"
+                >
+                    <Upload size={16} /> Parse New Resume
+                </button>
+
+                <h3 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-3">Pipeline Stage</h3>
+                <div className="flex flex-wrap gap-2">
+                    {['New', 'Screening', 'Interview', 'Offer', 'Placed', 'Rejected'].map(status => (
+                    <button 
+                        key={status} 
+                        onClick={() => handleStatusChange(status)} 
+                        className={`px-3 py-1.5 rounded-lg text-[10px] font-bold border transition-all ${sidebarData.status === status ? 'bg-slate-900 text-white border-slate-900 shadow-sm' : 'bg-white text-slate-600 border-gray-200 hover:border-gray-300'}`}
+                    >
+                        {status}
+                    </button>
+                    ))}
+                </div>
+            </div>
+
+            <div className="p-6 border-b border-gray-100 bg-white">
+                 <FlagManager candidateId={sidebarData.id} />
+            </div>
+
+            {/* EXPANDING LOG SECTION */}
+            <div className="flex-1 flex flex-col min-h-0 bg-white p-6">
+                <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider mb-3">Activity & Notes</h3>
+                
+                {/* Note Input */}
+                <div className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm mb-4">
+                    <MentionInput 
+                        value={noteContent}
+                        onChange={setNoteContent}
+                        placeholder="Internal note... (@team)"
+                        className="w-full bg-transparent border-none text-sm focus:ring-0 resize-none placeholder:text-gray-400 text-gray-900 min-h-[60px]"
+                    />
+                    <div className="flex justify-end mt-2 pt-2 border-t border-gray-100">
+                        <button onClick={handleAddNote} disabled={!noteContent.trim()} className="bg-slate-900 text-white px-3 py-1 rounded-md text-xs font-bold hover:bg-slate-800 shadow-sm transition disabled:opacity-50">Post</button>
+                    </div>
+                </div>
+
+                {/* Scrollable Logs - Fills remaining space */}
+                <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-4">
+                    {logs.map(log => (
+                    <div key={log.id} className="relative pl-6 border-l-2 border-gray-100 pb-1">
+                        <div className={`absolute left-[-5px] top-1 w-2.5 h-2.5 rounded-full border-2 border-white shadow-sm ${log.action_type === 'Note' ? 'bg-yellow-400' : 'bg-slate-400'}`}></div>
+                        <div className="flex justify-between items-start">
+                            <p className="text-xs font-bold text-gray-900">{log.action_type}</p>
+                            <span className="text-[10px] text-slate-400">{new Date(log.created_at).toLocaleDateString()}</span>
+                        </div>
+                        <p className="text-xs text-slate-600 mt-1 leading-relaxed bg-slate-50 p-2 rounded-lg inline-block w-full">{log.description}</p>
+                        <p className="text-[10px] text-slate-400 mt-1 pl-1">by {log.profiles?.email?.split('@')[0] || 'System'}</p>
+                    </div>
+                    ))}
+                    {logs.length === 0 && <p className="text-xs text-center text-gray-400 italic py-4">No activity yet</p>}
+                </div>
+            </div>
         </div>
       </div>
+
+      {/* === FOOTER === */}
+      {sidebarDirty && (
+        <div className="bg-white border-t border-gray-200 p-4 flex justify-between items-center z-50 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
+          <p className="text-xs text-orange-600 font-bold flex items-center gap-1 animate-pulse">
+             Unsaved changes
+          </p>
+          <button onClick={saveSidebarChanges} className="bg-green-600 hover:bg-green-700 text-white px-8 py-2.5 rounded-xl text-sm font-bold shadow-lg shadow-green-200 flex items-center gap-2 transition-all transform hover:scale-[1.02]">
+            <Save size={18}/> Save Changes
+          </button>
+        </div>
+      )}
 
       {/* Modals */}
       <HandoffModal 
@@ -341,6 +421,7 @@ export default function TalentDrawer({
       {showParser && (
         <ResumeParser
           candidateId={sidebarData.id}
+          currentResumeUrl={sidebarData.resume_url} 
           onParseComplete={handleParseComplete}
           onClose={() => setShowParser(false)}
         />
@@ -351,7 +432,7 @@ export default function TalentDrawer({
         onClose={() => setShowViewer(false)}
         initialResumeUrl={sidebarData.resume_url} 
         onUpdateUrl={handleResumeUpdate} 
-        sidebarWidth="500px"
+        sidebarWidth="800px" 
       />
     </div>
   );
