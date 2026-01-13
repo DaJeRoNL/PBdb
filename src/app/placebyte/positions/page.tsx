@@ -8,6 +8,7 @@ import {
 import PositionCard from "./components/PositionCard";
 import PositionDetailSheet from "./components/PositionDetailSheet";
 import ClientFolder from "./components/ClientFolder";
+import CreatePositionModal from "./components/CreatePositionModal"; // Re-importing if missing
 
 export const dynamic = "force-dynamic";
 
@@ -24,10 +25,11 @@ export default function PositionsPage() {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   
-  // State for the "Folder" view
+  // Interactions
   const [activeClientId, setActiveClientId] = useState<string | null>(null);
   const [selectedPositionId, setSelectedPositionId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [showCreateModal, setShowCreateModal] = useState(false);
 
   useEffect(() => {
     fetchPositions();
@@ -52,14 +54,11 @@ export default function PositionsPage() {
         .order('created_at', { ascending: false });
 
       if (error) {
-         // Fallback if relation fails
          console.warn("Relation fetch failed, trying simple fetch...", error.message);
-         const { data: simpleData, error: simpleError } = await supabase
+         const { data: simpleData } = await supabase
           .from('positions')
           .select(`*, client:clients(id, name, domain)`)
           .order('created_at', { ascending: false });
-          
-         if (simpleError) throw simpleError;
          if (simpleData) processData(simpleData);
       } else if (data) {
         processData(data);
@@ -87,7 +86,6 @@ export default function PositionsPage() {
     const groups: Record<string, ClientGroup> = {};
     
     positions.forEach(p => {
-      // Filter by search query if active
       if (searchQuery) {
          const match = p.title?.toLowerCase().includes(searchQuery.toLowerCase()) || 
                        p.client?.name?.toLowerCase().includes(searchQuery.toLowerCase());
@@ -138,15 +136,20 @@ export default function PositionsPage() {
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">Select a client folder to manage roles.</p>
         </div>
-        <div className="relative w-64">
-           <Search className="absolute left-3 top-2.5 text-slate-400" size={14}/>
-           <input 
-             type="text" 
-             placeholder="Search folders or roles..." 
-             className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:bg-white focus:ring-2 focus:ring-blue-100 outline-none transition-all text-slate-900 placeholder:text-slate-400"
-             value={searchQuery}
-             onChange={(e) => setSearchQuery(e.target.value)}
-           />
+        <div className="flex gap-3">
+            <div className="relative w-64">
+                <Search className="absolute left-3 top-2.5 text-slate-400" size={14}/>
+                <input 
+                    type="text" 
+                    placeholder="Search folders or roles..." 
+                    className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:bg-white focus:ring-2 focus:ring-blue-100 outline-none transition-all text-slate-900 placeholder:text-slate-400"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                />
+            </div>
+            <button onClick={() => setShowCreateModal(true)} className="bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm hover:bg-slate-800 transition">
+                + New Position
+            </button>
         </div>
       </div>
 
@@ -205,7 +208,7 @@ export default function PositionsPage() {
                   </button>
                </div>
 
-               <div className="flex-1 overflow-y-auto p-8">
+               <div className="flex-1 overflow-y-auto p-8 bg-slate-50">
                   <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
                      {activeGroup.positions.map(pos => (
                         <PositionCard 
@@ -228,6 +231,14 @@ export default function PositionsPage() {
          onClose={() => setSelectedPositionId(null)}
          onUpdate={fetchPositions}
       />
+
+      {/* Create Modal */}
+      {showCreateModal && (
+          <CreatePositionModal 
+            onClose={() => setShowCreateModal(false)}
+            onSuccess={fetchPositions}
+          />
+      )}
 
     </div>
   );
