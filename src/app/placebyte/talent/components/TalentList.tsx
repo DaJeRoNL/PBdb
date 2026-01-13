@@ -60,8 +60,8 @@ export default function TalentList({
         <table className="w-full text-left table-auto">
           <thead className="bg-gray-50 text-xs font-bold text-slate-500 uppercase border-b border-gray-200 sticky top-0 z-10">
             <tr>
-              {/* FIXED: Checkbox column always visible, proper transition */}
-              <th className={`px-4 py-4 text-center transition-all duration-300 ${isSelectionMode ? 'w-10 opacity-100' : 'w-10 opacity-0'}`}>
+              {/* FIXED: Checkbox column collapses when not in selection mode */}
+              <th className={`px-4 py-4 text-center transition-all duration-300 overflow-hidden ${isSelectionMode ? 'w-10 opacity-100' : 'w-0 opacity-0 p-0 hidden'}`}>
                   <button onClick={onToggleAll} className="text-slate-400 hover:text-gray-600">
                     {selectedIds.size > 0 && selectedIds.size === candidates.length ? <CheckSquare size={16}/> : <Square size={16}/>}
                   </button>
@@ -77,7 +77,6 @@ export default function TalentList({
           <tbody className="divide-y divide-gray-100">
             {candidates.map((c) => {
               const isSelected = selectedIds.has(c.id);
-              // FIXED: Use last_contacted_at from database, fallback to created_at
               const daysSince = getDaysSince((c as any).last_contacted_at || (c as any).created_at);
               
               return (
@@ -89,8 +88,8 @@ export default function TalentList({
                   className={`group hover:bg-slate-50 cursor-pointer transition-colors border-l-4 ${isSelected ? 'bg-purple-50 border-l-purple-500' : 'border-l-transparent'}`}
                   onContextMenu={(e) => onContextMenu(e, c)}
                 >
-                  {/* FIXED: Checkbox always present, visibility controlled by opacity */}
-                  <td className={`px-4 text-center transition-all duration-300 ${isSelectionMode ? 'opacity-100' : 'opacity-0 pointer-events-none'}`} 
+                  {/* FIXED: Checkbox column collapses */}
+                  <td className={`px-4 text-center transition-all duration-300 overflow-hidden ${isSelectionMode ? 'w-10 opacity-100' : 'w-0 opacity-0 p-0 hidden'}`} 
                       onClick={(e) => { e.stopPropagation(); onSelect(c.id, false); }}>
                      <div className={`w-4 h-4 rounded border mx-auto flex items-center justify-center ${isSelected ? 'bg-purple-600 border-purple-600 text-white' : 'border-gray-300'}`}>
                        {isSelected && <CheckCircle2 size={12}/>}

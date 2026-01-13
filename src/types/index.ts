@@ -30,4 +30,7 @@ export interface Candidate {
   placed_at?: string;
   fee?: number;
   rejected_reason?: string;
+  source?: string; // Added source property
+  client_feedback?: 'Interested' | 'Not a fit' | 'Question'; // Added based on usage in PortalDashboard
+  notes?: string; // Added based on usage
 }

@@ -1,6 +1,6 @@
 "use client";
 import { useState, useMemo, useEffect, useRef } from "react";
-import { useSearchParams } from "next/navigation"; 
+import { useSearchParams, useRouter } from "next/navigation"; 
 import { supabase } from "@/lib/supabaseClient";
 import { Candidate } from "@/types";
 import { Mail, Briefcase, Trash2, Archive, X, Pencil } from "lucide-react";
@@ -10,6 +10,11 @@ import TalentFilter from "./components/TalentFilter";
 import TalentList from "./components/TalentList";
 import TalentBoard from "./components/TalentBoard";
 import TalentDrawer from "./components/TalentDrawer";
+// REMOVED: PositionsList import
+import SourcesView from "./components/SourcesView"; 
+import SourceModal from "./components/SourceModal"; 
+import SourceDetailModal from "./components/SourceDetailModal"; 
+import RecentTalentActivity from "./components/RecentTalentActivity"; 
 import AddCandidateModal from "./components/AddCandidateModal";
 import EditCandidateModal from "./components/EditCandidateModal"; 
 import EmailModal from "./components/EmailModal";
@@ -26,15 +31,20 @@ const getColorFromStr = (str: string) => {
 };
 
 export default function TalentPage() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const currentTab = searchParams.get('view') || 'active'; 
 
   // View & Data State
   const [candidates, setCandidates] = useState<Candidate[]>([]);
+  // REMOVED: positions state
+  const [sources, setSources] = useState<any[]>([]); 
   const [viewMode, setViewMode] = useState<'list' | 'board'>('list');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [internalStaff, setInternalStaff] = useState<any[]>([]);
+  const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
+  const [sourceToView, setSourceToView] = useState<any>(null); // Source to view/edit
   
   // Selection
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -44,6 +54,8 @@ export default function TalentPage() {
 
   // Modals
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showSourceModal, setShowSourceModal] = useState(false);
+  const [showSourceDetailModal, setShowSourceDetailModal] = useState(false); 
   const [showViewManager, setShowViewManager] = useState(false);
   const [showEmailModal, setShowEmailModal] = useState(false);
   
@@ -83,7 +95,13 @@ export default function TalentPage() {
     if (currentTab !== 'active') setViewMode('list');
     setSelectedIds(new Set());
     setIsSelectionMode(false);
-    fetchCandidates();
+    
+    // REMOVED: positions check
+    if (currentTab === 'sources') {
+      fetchSources();
+    } else {
+      fetchCandidates();
+    }
   }, [currentTab]);
 
   const init = async () => {
@@ -96,7 +114,10 @@ export default function TalentPage() {
       .eq('role', 'internal');
     setInternalStaff(staff || []);
     
-    fetchCandidates();
+    // Initial fetch based on default tab
+    // REMOVED: positions check
+    if (currentTab === 'sources') fetchSources();
+    else fetchCandidates();
   };
 
   const fetchCandidates = async () => {
@@ -119,6 +140,17 @@ export default function TalentPage() {
     }
   };
 
+  // REMOVED: fetchPositions function
+
+  const fetchSources = async () => {
+    const { data } = await supabase
+      .from('talent_sources')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (data) setSources(data);
+    fetchCandidates(); // Also need candidates to count stats
+  };
+
   const resetInactivityTimer = () => {
     if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
     if (isSelectionMode) {
@@ -130,8 +162,12 @@ export default function TalentPage() {
   };
 
   const filteredCandidates = useMemo(() => {
-    // Optimization: If we are in placements tab, we don't need to filter candidates for the list
+    // Optimization
+    // REMOVED: positions check
     if (currentTab === 'placements') return [];
+    
+    // Filter for Sources View
+    if (currentTab === 'sources' && !selectedSourceId) return [];
 
     return candidates.filter(c => {
       if (currentTab === 'archive') {
@@ -139,6 +175,12 @@ export default function TalentPage() {
       } else {
         if ((c as any).is_deleted) return false;
         if (c.status === 'Rejected' || c.status === 'Placed') return false;
+      }
+
+      // Source Filter
+      if (currentTab === 'sources' && selectedSourceId) {
+          const source = sources.find(s => s.id === selectedSourceId);
+          if (source && c.source !== source.name) return false;
       }
 
       const searchLower = searchQuery.toLowerCase();
@@ -152,7 +194,7 @@ export default function TalentPage() {
 
       return true;
     });
-  }, [candidates, searchQuery, filterStatus, filterOwner, currentTab, currentUser]);
+  }, [candidates, searchQuery, filterStatus, filterOwner, currentTab, currentUser, selectedSourceId, sources]);
 
   const selectedCandidate = useMemo(() => 
     candidates.find(c => c.id === selectedId) || null, 
@@ -164,13 +206,15 @@ export default function TalentPage() {
     [candidates, selectedIds]
   );
 
-  // ✅ NOW we can safely return the Placements Hub if active
-  // This ensures all hooks above run consistently on every render
+  // --- EARLY RETURNS FOR SUB-VIEWS ---
+  
   if (currentTab === 'placements') {
     return <PlacementsHub />;
   }
 
-  // --- Helper Functions ---
+  // REMOVED: Positions Tab view block
+
+  // --- HELPER FUNCTIONS ---
 
   const clearSelection = () => {
     setSelectedIds(new Set());
@@ -273,6 +317,46 @@ export default function TalentPage() {
     setFilterOwner(f.owner);
   };
 
+  const handleCreateSource = async (data: any) => {
+    const { error } = await supabase.from('talent_sources').insert([data]);
+    if (!error) { setShowSourceModal(false); fetchSources(); } else alert(error.message);
+  };
+
+  // Safe delete handler
+  const handleDeleteSource = async (id: string, e?: any) => {
+    if (e && e.stopPropagation) {
+      e.stopPropagation();
+    }
+    
+    // Re-check logic here, but UI should also block it
+    const source = sources.find(s => s.id === id);
+    if (source?.name.toLowerCase() === 'referral') {
+        alert("Referral source cannot be deleted.");
+        return;
+    }
+
+    if (!confirm("Delete this source? Candidates will remain.")) return;
+    
+    const { error } = await supabase.from('talent_sources').delete().eq('id', id);
+    if (!error) {
+      fetchSources();
+      setShowSourceDetailModal(false);
+      setSourceToView(null);
+    } else {
+      alert("Failed to delete source: " + error.message);
+    }
+  };
+
+  const handleTabChange = (tab: string) => {
+    router.push(`/placebyte/talent?view=${tab}`);
+  };
+
+  // --- SOURCE CLICK HANDLER ---
+  const handleSelectSource = (source: any) => {
+      setSourceToView(source);
+      setShowSourceDetailModal(true);
+  };
+
   return (
     <div className="flex flex-col h-full w-full bg-slate-50 relative overflow-hidden" 
       onClick={() => { setContextMenu(null); if (!isSelectionMode) clearSelection(); }}
@@ -323,57 +407,86 @@ export default function TalentPage() {
         </div>
       )}
 
-      <TalentFilter 
-        currentTab={currentTab}
-        viewMode={viewMode}
-        setViewMode={setViewMode}
-        searchQuery={searchQuery}
-        setSearchQuery={setSearchQuery}
-        filterStatus={filterStatus}
-        setFilterStatus={setFilterStatus}
-        filterOwner={filterOwner}
-        setFilterOwner={setFilterOwner}
-        savedFilters={savedFilters}
-        onSaveFilter={saveCurrentFilter}
-        onApplyFilter={applySavedFilter}
-        onShowViewManager={() => setShowViewManager(true)}
-        onAddClick={() => { 
-          // setCandidateForm({}); // Remove old ref
-          // setEditingCandidateId(null); // Remove old ref
-          setShowAddModal(true); 
-        }}
-      />
+      {/* --- SOURCES GRID VIEW --- */}
+      {currentTab === 'sources' ? (
+        <div className="flex-1 overflow-y-auto">
+            <TalentFilter 
+                currentTab={currentTab}
+                viewMode={viewMode}
+                setViewMode={setViewMode}
+                searchQuery={searchQuery}
+                setSearchQuery={setSearchQuery}
+                filterStatus={filterStatus}
+                setFilterStatus={setFilterStatus}
+                filterOwner={filterOwner}
+                setFilterOwner={setFilterOwner}
+                savedFilters={savedFilters}
+                onSaveFilter={saveCurrentFilter}
+                onApplyFilter={applySavedFilter}
+                onShowViewManager={() => setShowViewManager(true)}
+                onAddClick={() => setShowSourceModal(true)}
+                onTabChange={handleTabChange}
+            />
+            <div className="p-8">
+                <SourcesView 
+                    sources={sources} 
+                    candidates={candidates} 
+                    activeSourceId={selectedSourceId}
+                    onSelectSource={handleSelectSource}
+                    onDelete={handleDeleteSource}
+                    onCreate={() => setShowSourceModal(true)}
+                />
+            </div>
+        </div>
+      ) : (
+        <>
+            {currentTab === 'active' && <div className="px-8 pt-8"><RecentTalentActivity candidates={candidates} onOpenDrawer={setSelectedId} /></div>}
 
-      <div className="flex-1 w-full min-w-0 overflow-hidden relative">
-        {viewMode === 'list' ? (
-          <TalentList 
-            candidates={filteredCandidates}
-            selectedIds={selectedIds}
-            isSelectionMode={isSelectionMode}
-            selectedId={selectedId}
-            currentTab={currentTab}
-            onSelect={handleSelection}
-            onToggleSelectionMode={setIsSelectionMode}
-            onToggleAll={toggleAll}
-            onOpenDrawer={setSelectedId}
-            onContextMenu={(e, c) => {
-              e.preventDefault(); 
-              e.stopPropagation();
-              handleSelection(c.id, true); 
-              setIsSelectionMode(true);
-              setContextMenu({ visible: true, x: e.clientX, y: e.clientY });
-            }}
-            onRestore={handleRestore}
-          />
-        ) : (
-          <TalentBoard 
-            candidates={filteredCandidates}
-            selectedId={selectedId}
-            onOpenDrawer={setSelectedId}
-          />
-        )}
-      </div>
+            <TalentFilter 
+                currentTab={currentTab}
+                viewMode={viewMode}
+                setViewMode={setViewMode}
+                searchQuery={searchQuery}
+                setSearchQuery={setSearchQuery}
+                filterStatus={filterStatus}
+                setFilterStatus={setFilterStatus}
+                filterOwner={filterOwner}
+                setFilterOwner={setFilterOwner}
+                savedFilters={savedFilters}
+                onSaveFilter={saveCurrentFilter}
+                onApplyFilter={applySavedFilter}
+                onShowViewManager={() => setShowViewManager(true)}
+                onAddClick={() => setShowAddModal(true)}
+                onTabChange={handleTabChange}
+            />
 
+            <div className="flex-1 w-full min-w-0 overflow-hidden relative">
+                {viewMode === 'list' ? (
+                <TalentList 
+                    candidates={filteredCandidates}
+                    selectedIds={selectedIds}
+                    isSelectionMode={isSelectionMode}
+                    selectedId={selectedId}
+                    currentTab={currentTab}
+                    onSelect={handleSelection}
+                    onToggleSelectionMode={setIsSelectionMode}
+                    onToggleAll={toggleAll}
+                    onOpenDrawer={setSelectedId}
+                    onContextMenu={(e, c) => {
+                        e.preventDefault(); e.stopPropagation();
+                        handleSelection(c.id, true); setIsSelectionMode(true);
+                        setContextMenu({ visible: true, x: e.clientX, y: e.clientY });
+                    }}
+                    onRestore={(id: string) => { supabase.from('candidates').update({ is_deleted: false }).eq('id', id).then(fetchCandidates); }}
+                />
+                ) : (
+                <TalentBoard candidates={filteredCandidates} selectedId={selectedId} onOpenDrawer={setSelectedId} />
+                )}
+            </div>
+        </>
+      )}
+
+      {/* --- DRAWERS & MODALS --- */}
       <TalentDrawer 
         candidate={selectedCandidate} 
         isOpen={!!selectedId} 
@@ -404,6 +517,25 @@ export default function TalentPage() {
         <AddCandidateModal 
           onClose={() => setShowAddModal(false)} 
           onSuccess={fetchCandidates} 
+        />
+      )}
+
+      {showSourceModal && (
+        <SourceModal 
+          isOpen={showSourceModal} 
+          onClose={() => setShowSourceModal(false)} 
+          onSubmit={handleCreateSource} 
+        />
+      )}
+
+      {/* SOURCE DETAIL MODAL */}
+      {showSourceDetailModal && sourceToView && (
+        <SourceDetailModal
+            isOpen={showSourceDetailModal}
+            source={sourceToView}
+            onClose={() => setShowSourceDetailModal(false)}
+            onUpdate={fetchSources}
+            onDelete={handleDeleteSource}
         />
       )}
 

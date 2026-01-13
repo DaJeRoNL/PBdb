@@ -13,7 +13,9 @@ export default function PlacebyteShell({ children }: { children: React.ReactNode
   const isLeads = pathname.includes('/placebyte/leads');
   const isAccounts = pathname.includes('/placebyte/accounts');
   const isPortals = pathname.includes('/placebyte/portals');
-  const isTalent = pathname.includes('/placebyte/talent');
+  
+  // UPDATED: Include positions in isTalent so the sub-navigation persists
+  const isTalent = pathname.includes('/placebyte/talent') || pathname.includes('/placebyte/positions');
 
   const tabClass = (active: boolean) => 
     `px-4 py-2 text-sm font-medium rounded-md transition-all ${
@@ -24,8 +26,8 @@ export default function PlacebyteShell({ children }: { children: React.ReactNode
 
   // Scroll locking logic
   const mainWrapperClass = isTalent 
-    ? "flex-1 overflow-hidden relative flex flex-col min-w-0" // Locked for Talent Kanban
-    : "flex-1 overflow-auto p-8 min-w-0"; // Standard scroll for others
+    ? "flex-1 overflow-hidden relative flex flex-col min-w-0" // Locked for Talent Kanban/Positions
+    : "flex-1 overflow-auto min-w-0"; // Standard scroll for others
 
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden">
@@ -54,18 +56,21 @@ export default function PlacebyteShell({ children }: { children: React.ReactNode
             </div>
           )}
 
-          {/* TALENT TABS */}
+          {/* TALENT TABS - Archive moved to Sub-Nav */}
           {isTalent && (
-            <div className="flex bg-gray-100 p-1 rounded-lg">
-              <Link href="/placebyte/talent?view=active" className={tabClass(currentView === 'active')}>
-                Active Pool
-              </Link>
-              <Link href="/placebyte/talent?view=placements" className={tabClass(currentView === 'placements')}>
-                Placements
-              </Link>
-              <Link href="/placebyte/talent?view=archive" className={tabClass(currentView === 'archive')}>
-                Archive
-              </Link>
+            <div className="flex items-center gap-4">
+              <div className="flex bg-gray-100 p-1 rounded-lg">
+                <Link href="/placebyte/talent?view=active" className={tabClass(currentView === 'active' && !pathname.includes('/positions'))}>
+                  Active Pool
+                </Link>
+                {/* UPDATED: Point to new page path instead of query param */}
+                <Link href="/placebyte/positions" className={tabClass(pathname.includes('/placebyte/positions'))}>
+                  Positions
+                </Link>
+                <Link href="/placebyte/talent?view=placements" className={tabClass(currentView === 'placements')}>
+                  Placements
+                </Link>
+              </div>
             </div>
           )}
         </header>

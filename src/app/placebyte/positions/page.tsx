@@ -1,274 +1,234 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import { Plus, Briefcase, Building2, MapPin, DollarSign, Users, Calendar, AlertCircle, Search, Filter, X, Edit3 } from "lucide-react";
+import { 
+  Briefcase, Search, Folder, ChevronRight, X, LayoutGrid,
+  DollarSign, BarChart3, Building2, Layers
+} from "lucide-react";
+import PositionCard from "./components/PositionCard";
+import PositionDetailSheet from "./components/PositionDetailSheet";
+import ClientFolder from "./components/ClientFolder";
 
-interface Position {
-  id: string;
-  client_id: string;
-  title: string;
-  department: string;
-  location: string;
-  employment_type: string;
-  salary_min: number;
-  salary_max: number;
-  description: string;
-  requirements: string[];
-  status: string;
-  priority: string;
-  openings_count: number;
-  filled_count: number;
-  owner_id: string;
-  target_fill_date: string;
-  created_at: string;
-  client?: { name: string };
-  owner?: { email: string };
-  submission_count?: number;
-  shortlist_count?: number;
+export const dynamic = "force-dynamic";
+
+interface ClientGroup {
+  clientId: string;
+  clientName: string;
+  domain?: string;
+  positions: any[];
+  totalFee: number;
 }
 
 export default function PositionsPage() {
-  const [positions, setPositions] = useState<Position[]>([]);
-  const [filteredPositions, setFilteredPositions] = useState<Position[]>([]);
+  const [positions, setPositions] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  
+  // State for the "Folder" view
+  const [activeClientId, setActiveClientId] = useState<string | null>(null);
+  const [selectedPositionId, setSelectedPositionId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [filterStatus, setFilterStatus] = useState("Open");
-  const [filterPriority, setFilterPriority] = useState("All");
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [selectedPosition, setSelectedPosition] = useState<Position | null>(null);
 
   useEffect(() => {
     fetchPositions();
+    const channel = supabase.channel('positions_realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'positions' }, () => fetchPositions())
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
   }, []);
 
-  useEffect(() => {
-    filterData();
-  }, [positions, searchQuery, filterStatus, filterPriority]);
-
   const fetchPositions = async () => {
-    const { data, error } = await supabase
-      .from('positions')
-      .select(`
-        *,
-        client:clients(name),
-        owner:profiles(email)
-      `)
-      .eq('is_deleted', false)
-      .order('created_at', { ascending: false });
+    setLoading(true);
+    setErrorMsg(null);
+    
+    try {
+      const { data, error } = await supabase
+        .from('positions')
+        .select(`
+          *,
+          client:clients(id, name, domain, description, industry, location, website),
+          owner:profiles!positions_owner_id_fkey(email)
+        `)
+        .order('created_at', { ascending: false });
 
-    if (!error && data) {
-      // Fetch submission counts for each position
-      const positionsWithCounts = await Promise.all(data.map(async (pos) => {
-        const { count: totalSubs } = await supabase
+      if (error) {
+         // Fallback if relation fails
+         console.warn("Relation fetch failed, trying simple fetch...", error.message);
+         const { data: simpleData, error: simpleError } = await supabase
+          .from('positions')
+          .select(`*, client:clients(id, name, domain)`)
+          .order('created_at', { ascending: false });
+          
+         if (simpleError) throw simpleError;
+         if (simpleData) processData(simpleData);
+      } else if (data) {
+        processData(data);
+      }
+    } catch (err: any) {
+      console.error("Fetch Error:", err);
+      setErrorMsg(err.message || "Failed to load positions.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const processData = async (data: any[]) => {
+      const enriched = await Promise.all(data.map(async (pos) => {
+        const { count } = await supabase
           .from('client_submissions')
           .select('*', { count: 'exact', head: true })
           .eq('position_id', pos.id);
-        
-        const { count: shortlisted } = await supabase
-          .from('client_submissions')
-          .select('*', { count: 'exact', head: true })
-          .eq('position_id', pos.id)
-          .eq('is_shortlisted', true);
-
-        return {
-          ...pos,
-          submission_count: totalSubs || 0,
-          shortlist_count: shortlisted || 0
-        };
+        return { ...pos, pipeline_count: count || 0 };
       }));
-
-      setPositions(positionsWithCounts);
-    }
+      setPositions(enriched);
   };
 
-  const filterData = () => {
-    let filtered = positions;
+  const groupedClients = useMemo(() => {
+    const groups: Record<string, ClientGroup> = {};
+    
+    positions.forEach(p => {
+      // Filter by search query if active
+      if (searchQuery) {
+         const match = p.title?.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                       p.client?.name?.toLowerCase().includes(searchQuery.toLowerCase());
+         if (!match) return;
+      }
 
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(p => 
-        p.title.toLowerCase().includes(query) ||
-        p.department?.toLowerCase().includes(query) ||
-        p.client?.name.toLowerCase().includes(query)
-      );
-    }
+      const cId = p.client?.id || 'unknown';
+      const cName = p.client?.name || 'Unknown Client';
+      
+      if (!groups[cId]) {
+        groups[cId] = { 
+          clientId: cId, 
+          clientName: cName, 
+          domain: p.client?.domain,
+          positions: [], 
+          totalFee: 0 
+        };
+      }
+      
+      groups[cId].positions.push(p);
+      
+      let fee = 0;
+      if (p.product_type === 'fixed') fee = Number(p.fee_fixed) || 0;
+      else {
+         const mid = ((Number(p.salary_min)||0) + (Number(p.salary_max)||0)) / 2;
+         fee = mid * ((Number(p.fee_percentage)||0) / 100);
+      }
+      groups[cId].totalFee += fee;
+    });
 
-    if (filterStatus !== "All") {
-      filtered = filtered.filter(p => p.status === filterStatus);
-    }
+    return Object.values(groups).sort((a,b) => b.totalFee - a.totalFee);
+  }, [positions, searchQuery]);
 
-    if (filterPriority !== "All") {
-      filtered = filtered.filter(p => p.priority === filterPriority);
-    }
-
-    setFilteredPositions(filtered);
-  };
-
-  const getPriorityColor = (priority: string) => {
-    switch(priority) {
-      case 'Urgent': return 'bg-red-100 text-red-700 border-red-300';
-      case 'High': return 'bg-orange-100 text-orange-700 border-orange-300';
-      case 'Medium': return 'bg-blue-100 text-blue-700 border-blue-300';
-      case 'Low': return 'bg-gray-100 text-gray-700 border-gray-300';
-      default: return 'bg-gray-100 text-gray-700 border-gray-300';
-    }
-  };
-
-  const getStatusColor = (status: string) => {
-    switch(status) {
-      case 'Open': return 'bg-green-100 text-green-700';
-      case 'On Hold': return 'bg-yellow-100 text-yellow-700';
-      case 'Filled': return 'bg-purple-100 text-purple-700';
-      case 'Cancelled': return 'bg-red-100 text-red-700';
-      default: return 'bg-gray-100 text-gray-700';
-    }
-  };
-
-  const getDaysOpen = (createdAt: string) => {
-    const diff = new Date().getTime() - new Date(createdAt).getTime();
-    return Math.floor(diff / (1000 * 3600 * 24));
-  };
+  const activeGroup = useMemo(() => 
+    groupedClients.find(g => g.clientId === activeClientId), 
+    [groupedClients, activeClientId]
+  );
 
   return (
-    <div className="flex flex-col h-full w-full bg-slate-50">
+    <div className="flex flex-col h-full w-full bg-slate-50 relative overflow-hidden text-slate-900">
+      
       {/* Header */}
-      <div className="px-8 py-6 bg-white border-b border-gray-200">
-        <div className="flex justify-between items-center">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-3">
-              <Briefcase className="text-blue-600" size={32}/>
-              Active Positions
-            </h1>
-            <p className="text-sm text-slate-600 mt-1">
-              {filteredPositions.length} open positions • {positions.reduce((sum, p) => sum + (p.submission_count || 0), 0)} total submissions
-            </p>
-          </div>
-          <button 
-            onClick={() => setShowAddModal(true)}
-            className="bg-blue-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-blue-700 transition flex items-center gap-2 shadow-lg"
-          >
-            <Plus size={20}/>
-            Add Position
-          </button>
+      <div className="px-8 py-5 bg-white border-b border-slate-200 shadow-sm flex-shrink-0 z-20 flex justify-between items-center">
+        <div>
+          <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+            <Briefcase className="text-blue-600" size={20}/>
+            Active Positions
+          </h1>
+          <p className="text-xs text-slate-500 mt-0.5">Select a client folder to manage roles.</p>
         </div>
-
-        {/* Filters */}
-        <div className="flex gap-4 mt-6">
-          <div className="flex-1 relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20}/>
-            <input
-              type="text"
-              placeholder="Search positions, clients, departments..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2.5 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-gray-900"
-            />
-          </div>
-          
-          <select
-            value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value)}
-            className="px-4 py-2.5 border-2 border-gray-300 rounded-lg focus:border-blue-500 outline-none text-gray-900 bg-white font-medium"
-          >
-            <option value="All">All Statuses</option>
-            <option value="Open">Open</option>
-            <option value="On Hold">On Hold</option>
-            <option value="Filled">Filled</option>
-            <option value="Cancelled">Cancelled</option>
-          </select>
-
-          <select
-            value={filterPriority}
-            onChange={(e) => setFilterPriority(e.target.value)}
-            className="px-4 py-2.5 border-2 border-gray-300 rounded-lg focus:border-blue-500 outline-none text-gray-900 bg-white font-medium"
-          >
-            <option value="All">All Priorities</option>
-            <option value="Urgent">Urgent</option>
-            <option value="High">High</option>
-            <option value="Medium">Medium</option>
-            <option value="Low">Low</option>
-          </select>
+        <div className="relative w-64">
+           <Search className="absolute left-3 top-2.5 text-slate-400" size={14}/>
+           <input 
+             type="text" 
+             placeholder="Search folders or roles..." 
+             className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:bg-white focus:ring-2 focus:ring-blue-100 outline-none transition-all text-slate-900 placeholder:text-slate-400"
+             value={searchQuery}
+             onChange={(e) => setSearchQuery(e.target.value)}
+           />
         </div>
       </div>
 
-      {/* Positions Grid */}
-      <div className="flex-1 overflow-y-auto p-8">
-        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-          {filteredPositions.map(position => (
-            <div 
-              key={position.id}
-              onClick={() => setSelectedPosition(position)}
-              className="bg-white border-2 border-gray-200 rounded-xl p-6 hover:border-blue-400 hover:shadow-lg transition cursor-pointer"
-            >
-              {/* Header */}
-              <div className="flex justify-between items-start mb-4">
-                <div className="flex-1">
-                  <h3 className="text-lg font-bold text-gray-900 mb-1">{position.title}</h3>
-                  <p className="text-sm text-slate-600 flex items-center gap-1">
-                    <Building2 size={14}/>
-                    {position.client?.name}
-                  </p>
-                </div>
-                <span className={`text-xs font-bold px-2 py-1 rounded border ${getPriorityColor(position.priority)}`}>
-                  {position.priority}
-                </span>
+      <div className="flex-1 flex overflow-hidden relative">
+        
+        {/* LEFT: Client Folders List */}
+        <div className={`flex-1 flex flex-col h-full overflow-y-auto p-6 transition-all duration-500 ease-in-out ${activeClientId ? 'w-1/3 max-w-sm border-r border-slate-200 bg-white' : 'w-full bg-slate-50'}`}>
+           {loading ? (
+              <div className="flex justify-center py-10"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-slate-900"></div></div>
+           ) : groupedClients.length === 0 ? (
+              <div className="text-center py-20 opacity-50">
+                 <Folder size={48} className="mx-auto mb-2 text-slate-300"/>
+                 <p>No active clients found.</p>
               </div>
-
-              {/* Details */}
-              <div className="space-y-2 mb-4 pb-4 border-b border-gray-100">
-                <div className="flex items-center gap-2 text-sm text-gray-700">
-                  <MapPin size={14} className="text-slate-400"/>
-                  {position.location}
-                </div>
-                <div className="flex items-center gap-2 text-sm text-gray-700">
-                  <DollarSign size={14} className="text-slate-400"/>
-                  ${position.salary_min?.toLocaleString()} - ${position.salary_max?.toLocaleString()}
-                </div>
-                <div className="flex items-center gap-2 text-sm text-gray-700">
-                  <Users size={14} className="text-slate-400"/>
-                  {position.filled_count}/{position.openings_count} filled
-                </div>
+           ) : (
+              <div className={`grid gap-4 ${activeClientId ? 'grid-cols-1' : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'}`}>
+                 {groupedClients.map(group => (
+                    <ClientFolder 
+                       key={group.clientId}
+                       group={group}
+                       isActive={activeClientId === group.clientId}
+                       onClick={() => setActiveClientId(group.clientId === activeClientId ? null : group.clientId)}
+                    />
+                 ))}
               </div>
-
-              {/* Stats */}
-              <div className="grid grid-cols-3 gap-3 mb-4">
-                <div className="text-center">
-                  <p className="text-2xl font-bold text-blue-600">{position.submission_count}</p>
-                  <p className="text-xs text-slate-500">Submitted</p>
-                </div>
-                <div className="text-center">
-                  <p className="text-2xl font-bold text-purple-600">{position.shortlist_count}</p>
-                  <p className="text-xs text-slate-500">Shortlisted</p>
-                </div>
-                <div className="text-center">
-                  <p className="text-2xl font-bold text-slate-600">{getDaysOpen(position.created_at)}</p>
-                  <p className="text-xs text-slate-500">Days Open</p>
-                </div>
-              </div>
-
-              {/* Status */}
-              <div className="flex items-center justify-between">
-                <span className={`text-xs font-bold px-3 py-1 rounded-full ${getStatusColor(position.status)}`}>
-                  {position.status}
-                </span>
-                <button 
-                  onClick={(e) => { e.stopPropagation(); /* Edit action */ }}
-                  className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition"
-                >
-                  <Edit3 size={16}/>
-                </button>
-              </div>
-            </div>
-          ))}
+           )}
         </div>
 
-        {filteredPositions.length === 0 && (
-          <div className="text-center py-16">
-            <Briefcase size={64} className="text-gray-300 mx-auto mb-4"/>
-            <h3 className="text-xl font-bold text-gray-900 mb-2">No positions found</h3>
-            <p className="text-gray-600">Try adjusting your filters or add a new position</p>
-          </div>
-        )}
+        {/* RIGHT: Sliding Position Cards Panel */}
+        <div 
+          className={`absolute top-0 right-0 h-full bg-slate-50 flex flex-col shadow-inner transition-transform duration-500 ease-in-out z-10 
+            ${activeClientId ? 'translate-x-0' : 'translate-x-full'}`}
+          style={{ width: activeClientId ? 'calc(100% - 24rem)' : '0px', left: activeClientId ? '24rem' : '100%' }}
+        >
+           {activeGroup && (
+             <>
+               <div className="px-8 py-6 border-b border-slate-200 bg-white flex justify-between items-center sticky top-0 z-20">
+                  <div className="flex items-center gap-4">
+                     <div className="w-12 h-12 bg-blue-600 rounded-xl flex items-center justify-center text-white font-bold text-xl shadow-lg shadow-blue-200">
+                        {activeGroup.clientName.charAt(0)}
+                     </div>
+                     <div>
+                        <h2 className="text-2xl font-bold text-slate-900">{activeGroup.clientName}</h2>
+                        <div className="flex items-center gap-3 text-xs text-slate-500 mt-1">
+                           <span className="flex items-center gap-1"><Layers size={12}/> {activeGroup.positions.length} Open Roles</span>
+                           <span className="w-1 h-1 bg-slate-300 rounded-full"></span>
+                           <span className="text-green-600 font-bold flex items-center gap-1"><DollarSign size={12}/> ${Math.round(activeGroup.totalFee/1000)}k Potential</span>
+                        </div>
+                     </div>
+                  </div>
+                  <button 
+                    onClick={() => setActiveClientId(null)} 
+                    className="p-2 hover:bg-slate-100 rounded-full text-slate-400 hover:text-slate-600 transition-colors"
+                  >
+                    <X size={24}/>
+                  </button>
+               </div>
+
+               <div className="flex-1 overflow-y-auto p-8">
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                     {activeGroup.positions.map(pos => (
+                        <PositionCard 
+                           key={pos.id} 
+                           position={pos} 
+                           onClick={() => setSelectedPositionId(pos.id)}
+                        />
+                     ))}
+                  </div>
+               </div>
+             </>
+           )}
+        </div>
+
       </div>
+
+      {/* BOTTOM SHEET */}
+      <PositionDetailSheet 
+         positionId={selectedPositionId} 
+         onClose={() => setSelectedPositionId(null)}
+         onUpdate={fetchPositions}
+      />
+
     </div>
   );
 }

@@ -129,7 +129,8 @@ export default function CommandPalette({ isOpen, onClose }: CommandPaletteProps)
         title: 'Open Positions',
         subtitle: 'View active job openings',
         icon: <FileText size={16} />,
-        action: () => router.push('/placebyte/positions'),
+        // UPDATED LINK: Point to the new consolidated view
+        action: () => router.push('/placebyte/talent?view=positions'),
         keywords: ['positions', 'jobs', 'openings', 'roles'],
         category: 'navigation'
       },
