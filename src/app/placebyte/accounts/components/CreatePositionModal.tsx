@@ -3,7 +3,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { 
   X, Save, Building2, Briefcase, DollarSign, MapPin, Percent, 
   Loader2, AlertCircle, CheckCircle2, Calendar, Users, Zap,
-  TrendingUp, FileText, Tag
+  TrendingUp, FileText, Tag, Sparkles
 } from "lucide-react";
 
 interface CreatePositionModalProps {
@@ -14,6 +14,7 @@ interface CreatePositionModalProps {
 
 export default function CreatePositionModal({ onClose, onSuccess, prefilledClientId }: CreatePositionModalProps) {
   const [loading, setLoading] = useState(false);
+  const [extracting, setExtracting] = useState(false);
   const [clients, setClients] = useState<any[]>([]);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [step, setStep] = useState<'basic' | 'commercial' | 'details'>('basic');
@@ -30,7 +31,8 @@ export default function CreatePositionModal({ onClose, onSuccess, prefilledClien
     salary_min: 0,
     salary_max: 0,
     description: '',
-    owner_id: ''
+    owner_id: '',
+    skills: [] as string[] // Added skills array for matching
   });
 
   useEffect(() => {
@@ -95,6 +97,37 @@ export default function CreatePositionModal({ onClose, onSuccess, prefilledClien
     else if (step === 'commercial') setStep('basic');
   };
 
+  // --- AI Extraction Logic ---
+  const handleExtractSkills = async () => {
+    if (!formData.description) return alert("Please enter a description first.");
+    setExtracting(true);
+    try {
+      const res = await fetch('/api/extract-job-skills', {
+        method: 'POST',
+        body: JSON.stringify({ description: formData.description })
+      });
+      const data = await res.json();
+      if (data.skills) {
+        setFormData(prev => ({ 
+            ...prev, 
+            skills: [...new Set([...prev.skills, ...data.skills])] // Merge unique
+        }));
+      }
+    } catch (e) {
+      console.error(e);
+      alert("Failed to extract skills");
+    } finally {
+      setExtracting(false);
+    }
+  };
+
+  const removeSkill = (skillToRemove: string) => {
+    setFormData(prev => ({
+        ...prev,
+        skills: prev.skills.filter(s => s !== skillToRemove)
+    }));
+  };
+
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
     
@@ -105,6 +138,7 @@ export default function CreatePositionModal({ onClose, onSuccess, prefilledClien
       ...formData,
       fee_percentage: formData.product_type === 'commission' ? formData.fee_percentage : null,
       fee_fixed: formData.product_type === 'fixed' ? formData.fee_fixed : null,
+      // skills: formData.skills // Ensure your Supabase 'positions' table has a 'skills' column (text[] or jsonb)
     }]);
     
     setLoading(false);
@@ -510,9 +544,33 @@ export default function CreatePositionModal({ onClose, onSuccess, prefilledClien
                     value={formData.description} 
                     onChange={e => setFormData({...formData, description: e.target.value})}
                   ></textarea>
-                  <p className="text-xs text-slate-500 mt-2">
-                    You can edit this later from the position details page.
-                  </p>
+                  
+                  {/* --- SKILL EXTRACTION UI --- */}
+                  <div className="mt-4">
+                    <div className="flex justify-between items-center mb-2">
+                        <label className="text-xs font-bold text-slate-600 uppercase">Skill Tags (For Matching)</label>
+                        <button 
+                        type="button" 
+                        onClick={handleExtractSkills} 
+                        disabled={extracting || !formData.description}
+                        className="text-[10px] bg-purple-100 text-purple-700 px-3 py-1.5 rounded-lg font-bold hover:bg-purple-200 transition flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                        {extracting ? <Loader2 size={12} className="animate-spin"/> : <Sparkles size={12}/>}
+                        Auto-Extract Skills
+                        </button>
+                    </div>
+                    
+                    <div className="flex flex-wrap gap-2 p-3 border border-slate-200 rounded-xl bg-slate-50 min-h-[50px] items-start content-start">
+                        {formData.skills.map((skill, i) => (
+                        <span key={i} className="bg-white border border-slate-200 px-2 py-1 rounded-md text-xs font-medium text-slate-700 flex items-center gap-1 shadow-sm">
+                            {skill}
+                            <button onClick={() => removeSkill(skill)} className="hover:text-red-500 rounded-full p-0.5"><X size={10} /></button>
+                        </span>
+                        ))}
+                        {formData.skills.length === 0 && <span className="text-xs text-slate-400 italic py-1">No tags generated yet. Extract from description to enable smart matching.</span>}
+                    </div>
+                  </div>
+
                 </div>
               </div>
 

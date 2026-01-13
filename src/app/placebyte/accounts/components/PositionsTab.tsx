@@ -1,6 +1,7 @@
-import React from 'react';
-import { Plus, Briefcase, Eye, Trash2, MapPin, DollarSign, TrendingUp } from 'lucide-react';
+import React, { useState } from 'react';
+import { Plus, Briefcase, Eye, Trash2, MapPin, DollarSign, TrendingUp, Edit3, Save, Loader2 } from 'lucide-react';
 import Link from 'next/link';
+import { supabase } from "@/lib/supabaseClient";
 
 interface PositionsTabProps {
   positions: any[];
@@ -15,6 +16,44 @@ export default function PositionsTab({
   onCreatePosition,
   onDeletePosition
 }: PositionsTabProps) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<any>(null);
+  const [saving, setSaving] = useState(false);
+
+  const startEdit = (pos: any) => {
+    setEditingId(pos.id);
+    setEditForm({ ...pos });
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditForm(null);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    const { error } = await supabase
+      .from('positions')
+      .update({
+        title: editForm.title,
+        location: editForm.location,
+        salary_min: editForm.salary_min,
+        salary_max: editForm.salary_max,
+        priority: editForm.priority,
+        status: editForm.status
+      })
+      .eq('id', editingId);
+
+    if (!error) {
+      setEditingId(null);
+      // We rely on the parent's subscription or a reload to update the list, 
+      // but a reload forces a refresh of the data
+      window.location.reload(); 
+    } else {
+      alert("Error: " + error.message);
+    }
+    setSaving(false);
+  };
 
   const calculatePositionFee = (position: any) => {
     if (position.product_type === 'fixed') {
@@ -65,111 +104,160 @@ export default function PositionsTab({
           <div className="grid grid-cols-1 gap-4">
             {positions.map(position => {
               const fee = calculatePositionFee(position);
+              const isEditing = editingId === position.id;
               
               return (
                 <div 
                   key={position.id} 
-                  className="bg-white border border-slate-200 rounded-xl p-5 hover:shadow-md transition-all group"
+                  className={`bg-white border rounded-xl p-5 transition-all group ${isEditing ? 'border-blue-400 ring-2 ring-blue-50 shadow-lg' : 'border-slate-200 hover:shadow-md'}`}
                 >
-                  {/* Header */}
-                  <div className="flex justify-between items-start mb-3">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-3 mb-2">
-                        <h3 className="text-lg font-bold text-slate-900">{position.title}</h3>
-                        
-                        {/* Priority Badge */}
-                        <span className={`text-xs px-2 py-1 rounded-full font-bold uppercase tracking-wide ${
-                          position.priority === 'Urgent' ? 'bg-red-100 text-red-700 border border-red-200' :
-                          position.priority === 'High' ? 'bg-orange-100 text-orange-700 border border-orange-200' :
-                          position.priority === 'Medium' ? 'bg-blue-100 text-blue-700 border border-blue-200' :
-                          'bg-slate-100 text-slate-600 border border-slate-200'
-                        }`}>
-                          {position.priority}
-                        </span>
-                        
-                        {/* Status Badge */}
-                        <span className={`text-xs px-2 py-1 rounded-full font-bold ${
-                          position.status === 'Open' ? 'bg-green-100 text-green-700 border border-green-200' :
-                          position.status === 'Filled' ? 'bg-blue-100 text-blue-700 border border-blue-200' :
-                          position.status === 'On Hold' ? 'bg-yellow-100 text-yellow-700 border border-yellow-200' :
-                          'bg-slate-100 text-slate-600 border border-slate-200'
-                        }`}>
-                          {position.status}
-                        </span>
+                  {isEditing ? (
+                     <div className="space-y-4">
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="text-[10px] font-bold uppercase text-slate-400">Job Title</label>
+                            <input className="w-full p-2 border rounded mt-1 text-sm font-bold" value={editForm.title} onChange={e => setEditForm({...editForm, title: e.target.value})} />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold uppercase text-slate-400">Location</label>
+                            <input className="w-full p-2 border rounded mt-1 text-sm" value={editForm.location} onChange={e => setEditForm({...editForm, location: e.target.value})} />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-3 gap-4">
+                          <div>
+                            <label className="text-[10px] font-bold uppercase text-slate-400">Min Salary</label>
+                            <input type="number" className="w-full p-2 border rounded mt-1 text-sm" value={editForm.salary_min} onChange={e => setEditForm({...editForm, salary_min: Number(e.target.value)})} />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold uppercase text-slate-400">Max Salary</label>
+                            <input type="number" className="w-full p-2 border rounded mt-1 text-sm" value={editForm.salary_max} onChange={e => setEditForm({...editForm, salary_max: Number(e.target.value)})} />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold uppercase text-slate-400">Priority</label>
+                            <select className="w-full p-2 border rounded mt-1 text-sm bg-white" value={editForm.priority} onChange={e => setEditForm({...editForm, priority: e.target.value})}>
+                              <option>Low</option><option>Medium</option><option>High</option><option>Urgent</option>
+                            </select>
+                          </div>
+                        </div>
+                        <div className="flex justify-end gap-2 pt-2">
+                          <button onClick={cancelEdit} className="px-4 py-2 text-xs font-bold text-slate-500 hover:bg-slate-50 rounded">Cancel</button>
+                          <button onClick={handleSave} disabled={saving} className="px-6 py-2 text-xs font-bold bg-blue-600 text-white rounded flex items-center gap-2">
+                            {saving ? <Loader2 size={12} className="animate-spin"/> : <Save size={12}/>} Save Changes
+                          </button>
+                        </div>
+                      </div>
+                  ) : (
+                    <>
+                      {/* Header */}
+                      <div className="flex justify-between items-start mb-3">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-3 mb-2">
+                            <h3 className="text-lg font-bold text-slate-900">{position.title}</h3>
+                            
+                            {/* Priority Badge */}
+                            <span className={`text-xs px-2 py-1 rounded-full font-bold uppercase tracking-wide ${
+                              position.priority === 'Urgent' ? 'bg-red-100 text-red-700 border border-red-200' :
+                              position.priority === 'High' ? 'bg-orange-100 text-orange-700 border border-orange-200' :
+                              position.priority === 'Medium' ? 'bg-blue-100 text-blue-700 border border-blue-200' :
+                              'bg-slate-100 text-slate-600 border border-slate-200'
+                            }`}>
+                              {position.priority}
+                            </span>
+                            
+                            {/* Status Badge */}
+                            <span className={`text-xs px-2 py-1 rounded-full font-bold ${
+                              position.status === 'Open' ? 'bg-green-100 text-green-700 border border-green-200' :
+                              position.status === 'Filled' ? 'bg-blue-100 text-blue-700 border border-blue-200' :
+                              position.status === 'On Hold' ? 'bg-yellow-100 text-yellow-700 border border-yellow-200' :
+                              'bg-slate-100 text-slate-600 border border-slate-200'
+                            }`}>
+                              {position.status}
+                            </span>
+                          </div>
+
+                          {/* Details Row */}
+                          <div className="flex items-center gap-6 text-sm">
+                            <div className="flex items-center gap-1.5 text-slate-600">
+                              <MapPin size={14}/>
+                              <span className="font-medium">{position.location || 'Remote'}</span>
+                            </div>
+                            
+                            <div className="flex items-center gap-1.5 text-slate-700">
+                              <DollarSign size={14}/>
+                              <span className="font-bold">
+                                ${(position.salary_min/1000).toFixed(0)}k - ${(position.salary_max/1000).toFixed(0)}k
+                              </span>
+                            </div>
+                            
+                            <div className="flex items-center gap-1.5 text-green-700">
+                              <TrendingUp size={14}/>
+                              <span className="font-bold">${(fee/1000).toFixed(1)}k fee</span>
+                              {position.product_type === 'commission' && (
+                                <span className="text-xs text-green-600">({position.fee_percentage}%)</span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Action Buttons */}
+                        <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <Link href={`/placebyte/positions?clientId=${selectedAccountId}&positionId=${position.id}`}>
+                            <button 
+                              className="p-2 hover:bg-blue-50 text-blue-600 rounded-lg transition-colors" 
+                              title="View in Positions Portal"
+                            >
+                              <Eye size={16}/>
+                            </button>
+                          </Link>
+                          
+                          {/* EDIT BUTTON ADDED HERE */}
+                          <button 
+                             onClick={() => startEdit(position)}
+                             className="p-2 hover:bg-slate-100 text-slate-500 rounded-lg transition-colors"
+                             title="Edit Details"
+                          >
+                             <Edit3 size={16}/>
+                          </button>
+                          
+                          <button 
+                            onClick={() => onDeletePosition(position.id)}
+                            className="p-2 hover:bg-red-50 text-red-600 rounded-lg transition-colors" 
+                            title="Delete Position"
+                          >
+                            <Trash2 size={16}/>
+                          </button>
+                        </div>
                       </div>
 
-                      {/* Details Row */}
-                      <div className="flex items-center gap-6 text-sm">
-                        <div className="flex items-center gap-1.5 text-slate-600">
-                          <MapPin size={14}/>
-                          <span className="font-medium">{position.location || 'Remote'}</span>
+                      {/* Description Preview */}
+                      {position.description && (
+                        <div className="pt-3 border-t border-slate-100">
+                          <p className="text-sm text-slate-600 line-clamp-2 leading-relaxed">
+                            {position.description}
+                          </p>
                         </div>
+                      )}
+
+                      {/* Metadata Footer */}
+                      <div className="flex items-center justify-between pt-3 mt-3 border-t border-slate-100 text-xs text-slate-500">
+                        <span>Created {new Date(position.created_at).toLocaleDateString('en-US', { 
+                          month: 'short', 
+                          day: 'numeric', 
+                          year: 'numeric' 
+                        })}</span>
                         
-                        <div className="flex items-center gap-1.5 text-slate-700">
-                          <DollarSign size={14}/>
-                          <span className="font-bold">
-                            ${(position.salary_min/1000).toFixed(0)}k - ${(position.salary_max/1000).toFixed(0)}k
+                        <div className="flex items-center gap-3">
+                          <span className={`px-2 py-1 rounded ${
+                            position.product_type === 'fixed' 
+                              ? 'bg-purple-100 text-purple-700' 
+                              : 'bg-blue-100 text-blue-700'
+                          }`}>
+                            {position.product_type === 'fixed' ? 'Fixed Fee' : 'Commission'}
                           </span>
                         </div>
-                        
-                        <div className="flex items-center gap-1.5 text-green-700">
-                          <TrendingUp size={14}/>
-                          <span className="font-bold">${(fee/1000).toFixed(1)}k fee</span>
-                          {position.product_type === 'commission' && (
-                            <span className="text-xs text-green-600">({position.fee_percentage}%)</span>
-                          )}
-                        </div>
                       </div>
-                    </div>
-
-                    {/* Action Buttons */}
-                    <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <Link href={`/placebyte/positions?clientId=${selectedAccountId}&positionId=${position.id}`}>
-                        <button 
-                          className="p-2 hover:bg-blue-50 text-blue-600 rounded-lg transition-colors" 
-                          title="View in Positions Portal"
-                        >
-                          <Eye size={16}/>
-                        </button>
-                      </Link>
-                      
-                      <button 
-                        onClick={() => onDeletePosition(position.id)}
-                        className="p-2 hover:bg-red-50 text-red-600 rounded-lg transition-colors" 
-                        title="Delete Position"
-                      >
-                        <Trash2 size={16}/>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Description Preview */}
-                  {position.description && (
-                    <div className="pt-3 border-t border-slate-100">
-                      <p className="text-sm text-slate-600 line-clamp-2 leading-relaxed">
-                        {position.description}
-                      </p>
-                    </div>
+                    </>
                   )}
-
-                  {/* Metadata Footer */}
-                  <div className="flex items-center justify-between pt-3 mt-3 border-t border-slate-100 text-xs text-slate-500">
-                    <span>Created {new Date(position.created_at).toLocaleDateString('en-US', { 
-                      month: 'short', 
-                      day: 'numeric', 
-                      year: 'numeric' 
-                    })}</span>
-                    
-                    <div className="flex items-center gap-3">
-                      <span className={`px-2 py-1 rounded ${
-                        position.product_type === 'fixed' 
-                          ? 'bg-purple-100 text-purple-700' 
-                          : 'bg-blue-100 text-blue-700'
-                      }`}>
-                        {position.product_type === 'fixed' ? 'Fixed Fee' : 'Commission'}
-                      </span>
-                    </div>
-                  </div>
                 </div>
               );
             })}

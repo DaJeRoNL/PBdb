@@ -7,8 +7,9 @@ import {
   Calendar, TrendingUp, Eye, Share2, Archive, Trash2,
   Phone, Mail, Linkedin, ExternalLink, Plus, MessageSquare,
   Star, Award, Filter, Download, Upload, Link as LinkIcon,
-  Zap, AlertTriangle, FileText, Tag, Copy, Check
+  Zap, AlertTriangle, FileText, Tag, Copy, Check, Sparkles, ArrowRight, Search
 } from "lucide-react";
+import RequirementsBenefitsSelector from "./RequirementsBenefitsSelector";
 
 interface PositionDetailSheetProps {
   positionId: string | null;
@@ -35,6 +36,162 @@ const getRelativeTime = (dateString: string) => {
   if (diffDays < 365) return `${Math.floor(diffDays / 30)}mo ago`;
   return date.toLocaleDateString();
 };
+
+/**
+ * Component to link a candidate to the position manually
+ */
+function ManualCandidateLink({ positionId, onLink }: { positionId: string, onLink: () => void }) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<any[]>([]);
+  const [searching, setSearching] = useState(false);
+
+  const searchCandidates = async (val: string) => {
+    setQuery(val);
+    if (val.length < 2) {
+      setResults([]);
+      return;
+    }
+    setSearching(true);
+    const { data } = await supabase
+      .from('candidates')
+      .select('id, name, role, email')
+      .ilike('name', `%${val}%`)
+      .limit(5);
+    setResults(data || []);
+    setSearching(false);
+  };
+
+  const linkCandidate = async (candidateId: string) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    const { error } = await supabase.from('client_submissions').insert([{
+      position_id: positionId,
+      candidate_id: candidateId,
+      status: 'Submitted',
+      stage: 'Sourced',
+      submitted_by: session?.user?.id
+    }]);
+
+    if (!error) {
+      setQuery("");
+      setResults([]);
+      onLink();
+    } else {
+      alert("Already linked or error: " + error.message);
+    }
+  };
+
+  return (
+    <div className="relative mt-4">
+      <div className="relative">
+        <Search className="absolute left-3 top-2.5 text-slate-400" size={14} />
+        <input 
+          type="text" 
+          placeholder="Search name to link manually..." 
+          className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-xs outline-none focus:ring-2 focus:ring-blue-100"
+          value={query}
+          onChange={(e) => searchCandidates(e.target.value)}
+        />
+      </div>
+      {results.length > 0 && (
+        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-xl z-50 overflow-hidden">
+          {results.map(c => (
+            <button 
+              key={c.id} 
+              onClick={() => linkCandidate(c.id)}
+              className="w-full text-left px-4 py-2 text-xs hover:bg-slate-50 flex justify-between items-center"
+            >
+              <div>
+                <p className="font-bold text-slate-900">{c.name}</p>
+                <p className="text-[10px] text-slate-500">{c.role}</p>
+              </div>
+              <Plus size={14} className="text-blue-500" />
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * AI Matching Component
+ * Threshold set to 40% as requested.
+ */
+function SuggestedCandidates({ positionSkills, positionId, onLink }: { positionSkills: string[], positionId: string, onLink: () => void }) {
+  const [matches, setMatches] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const findMatches = async () => {
+      const { data: candidates } = await supabase
+        .from('candidates')
+        .select('id, name, role, skills, avatar_color')
+        .eq('is_deleted', false)
+        .neq('status', 'Placed');
+
+      if (!candidates) {
+        setLoading(false);
+        return;
+      }
+
+      const scored = candidates.map((c: any) => {
+        if (!c.skills || !positionSkills || positionSkills.length === 0) return { ...c, score: 0 };
+        const candidateSkills = Array.isArray(c.skills) ? c.skills.map((s: string) => s.toLowerCase()) : [];
+        const requiredSkills = positionSkills.map(s => s.toLowerCase());
+        const intersection = requiredSkills.filter(s => candidateSkills.includes(s));
+        const score = Math.round((intersection.length / requiredSkills.length) * 100);
+        return { ...c, score, overlap: intersection.length };
+      });
+
+      // Filter: Nothing below 40%
+      setMatches(scored.filter((c: any) => c.score >= 40).sort((a: any, b: any) => b.score - a.score).slice(0, 5));
+      setLoading(false);
+    };
+
+    findMatches();
+  }, [positionSkills, positionId]);
+
+  const handleQuickLink = async (candidateId: string) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    await supabase.from('client_submissions').insert([{
+      position_id: positionId,
+      candidate_id: candidateId,
+      status: 'Submitted',
+      stage: 'Sourced',
+      submitted_by: session?.user?.id
+    }]);
+    onLink();
+  };
+
+  if (loading) return <div className="p-4 text-xs text-slate-400 italic">Analyzing pool...</div>;
+
+  return (
+    <div className="space-y-3 mt-1">
+      {matches.map(c => (
+        <div key={c.id} className="flex items-center justify-between p-3 border border-slate-100 rounded-xl hover:bg-slate-50 transition-colors group">
+          <div className="flex items-center gap-3">
+             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${c.avatar_color || 'bg-gray-100'}`}>
+                {c.name[0]}
+             </div>
+             <div className="min-w-0">
+                <p className="text-sm font-bold text-slate-900 truncate">{c.name}</p>
+                <p className="text-[10px] text-slate-500 truncate">{c.role}</p>
+             </div>
+          </div>
+          <div className="flex items-center gap-3">
+             <div className="text-right">
+                <p className="text-xs font-bold text-green-600">{c.score}%</p>
+             </div>
+             <button onClick={() => handleQuickLink(c.id)} className="p-1.5 bg-slate-900 text-white rounded-lg opacity-0 group-hover:opacity-100">
+                <ArrowRight size={14}/>
+             </button>
+          </div>
+        </div>
+      ))}
+      {matches.length === 0 && <p className="text-xs text-slate-400 italic py-2">No matches above 40% found.</p>}
+    </div>
+  );
+}
 
 export default function PositionDetailSheet({ positionId, onClose, onUpdate }: PositionDetailSheetProps) {
   const [position, setPosition] = useState<any>(null);
@@ -97,8 +254,8 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
           description: data.description || '',
           title: data.title || '',
           company_intel: data.company_intel || '',
-          requirements: data.requirements || '',
-          benefits: data.benefits || '',
+          requirements: data.requirements || [],
+          benefits: data.benefits || [],
         });
       }
     } catch (err) {
@@ -121,7 +278,12 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
           if (c) clientData = c;
         }
         
-        const completeData = { ...simpleData, client: clientData };
+        const completeData = { 
+            ...simpleData, 
+            client: clientData,
+            requirements: simpleData.requirements || [],
+            benefits: simpleData.benefits || []
+        };
         setPosition(completeData);
         setEditForm(completeData);
       }
@@ -142,8 +304,6 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
 
   const fetchActivityLogs = async () => {
     if (!positionId) return;
-    // Fetch activity logs if you have an activity_logs table
-    // For now, we'll use mock data
     const mockLogs = [
       {
         id: 1,
@@ -173,6 +333,8 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
       salary_min: editForm.salary_min,
       salary_max: editForm.salary_max,
       title: editForm.title,
+      requirements: editForm.requirements,
+      benefits: editForm.benefits,
     }).eq('id', positionId);
 
     if (!error) {
@@ -180,7 +342,6 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
       await fetchPosition();
       onUpdate();
       
-      // Add activity log
       const logEntry = {
         id: Date.now(),
         user: "You",
@@ -197,7 +358,6 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
 
   const handleAddLog = async () => {
     if (!newLog.trim()) return;
-    
     const logEntry = {
       id: Date.now(),
       user: "You",
@@ -205,7 +365,6 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
       description: newLog,
       created_at: new Date().toISOString(),
     };
-    
     setLogs([logEntry, ...logs]);
     setNewLog("");
   };
@@ -291,11 +450,7 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
 
   return (
     <div className={`fixed inset-0 z-[100] flex flex-col justify-end transition-all duration-300 ${isVisible ? 'bg-slate-900/50 backdrop-blur-sm' : 'bg-transparent pointer-events-none'}`}>
-       
-      {/* Backdrop */}
       <div className="absolute inset-0" onClick={closeSheet}></div>
-      
-      {/* Bottom Sheet */}
       <div 
         ref={sheetRef}
         className={`
@@ -304,7 +459,6 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
           ${isVisible ? 'translate-y-0 opacity-100' : 'translate-y-full opacity-0'}
         `}
       >
-        {/* Drag Handle */}
         <div 
           className="w-full h-6 flex items-center justify-center cursor-pointer hover:bg-slate-50 active:bg-slate-100 transition-colors flex-shrink-0 group" 
           onClick={closeSheet}
@@ -312,7 +466,6 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
           <div className="w-12 h-1 bg-slate-300 rounded-full group-hover:bg-slate-400 transition-colors"></div>
         </div>
 
-        {/* Header */}
         <div className="px-8 py-4 border-b border-slate-200 flex justify-between items-start bg-white z-20 flex-shrink-0">
           {position ? (
             <div className="flex-1 min-w-0">
@@ -323,22 +476,9 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
                 
                 <div className="h-4 w-px bg-slate-200"></div>
                 
-                {position.client?.website ? (
-                  <a 
-                    href={`https://${position.client.website}`} 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="text-sm text-slate-600 font-medium flex items-center gap-1.5 hover:text-blue-600 transition-colors group"
-                  >
-                    <Building2 size={14} className="group-hover:scale-110 transition-transform"/> 
-                    {position.client.name}
-                    <ExternalLink size={12} className="opacity-0 group-hover:opacity-100 transition-opacity"/>
-                  </a>
-                ) : (
-                  <span className="text-sm text-slate-600 font-medium flex items-center gap-1.5">
+                <span className="text-sm text-slate-600 font-medium flex items-center gap-1.5">
                     <Building2 size={14}/> {position.client?.name || 'Unknown Client'}
-                  </span>
-                )}
+                </span>
 
                 <div className="h-4 w-px bg-slate-200"></div>
                 
@@ -375,11 +515,6 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
                   title="Copy link"
                 >
                   {copiedLink ? <Check size={18} className="text-green-600"/> : <LinkIcon size={18}/>}
-                  {copiedLink && (
-                    <span className="absolute -bottom-8 left-1/2 -translate-x-1/2 text-xs bg-green-600 text-white px-2 py-1 rounded whitespace-nowrap">
-                      Link copied!
-                    </span>
-                  )}
                 </button>
                 
                 <button 
@@ -452,7 +587,6 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
           </div>
         </div>
 
-        {/* Navigation Tabs */}
         <div className="flex px-8 border-b border-slate-200 bg-white flex-shrink-0 overflow-x-auto">
           {[
             { id: 'overview', label: 'Overview', icon: Target },
@@ -481,7 +615,6 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
           ))}
         </div>
 
-        {/* Content Area */}
         <div 
           ref={contentRef}
           className="flex-1 overflow-y-auto bg-slate-50 custom-scrollbar"
@@ -497,7 +630,6 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
           ) : position ? (
             <div className="max-w-7xl mx-auto p-8 pb-20">
               
-              {/* === TAB: OVERVIEW === */}
               {activeTab === 'overview' && (
                 <div className="grid grid-cols-12 gap-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
                   
@@ -506,30 +638,6 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
                     
                     {/* Quick Stats Grid */}
                     <div className="grid grid-cols-3 gap-4">
-                      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
-                        <div className="flex items-center justify-between mb-2">
-                          <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Salary Range</p>
-                          <DollarSign size={16} className="text-green-500"/>
-                        </div>
-                        <p className="text-2xl font-bold text-slate-900">
-                          ${Math.round(Number(position.salary_min) / 1000)}k - ${Math.round(Number(position.salary_max) / 1000)}k
-                        </p>
-                        <p className="text-xs text-slate-500 mt-1">
-                          Avg: ${Math.round(((Number(position.salary_min) + Number(position.salary_max)) / 2) / 1000)}k
-                        </p>
-                      </div>
-
-                      <div className="bg-gradient-to-br from-green-50 to-emerald-50 p-5 rounded-xl border border-green-200 shadow-sm hover:shadow-md transition-shadow">
-                        <div className="flex items-center justify-between mb-2">
-                          <p className="text-xs font-bold text-green-700 uppercase tracking-wide">Projected Fee</p>
-                          <TrendingUp size={16} className="text-green-600"/>
-                        </div>
-                        <p className="text-2xl font-bold text-green-700">{calculateFee()}</p>
-                        <p className="text-xs text-green-600 mt-1">
-                          {position.product_type === 'fixed' ? 'Fixed fee' : `${position.fee_percentage}% of salary`}
-                        </p>
-                      </div>
-
                       <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
                         <div className="flex items-center justify-between mb-2">
                           <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Salary Range</p>
@@ -605,50 +713,53 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
                       )}
                     </div>
 
-                    {/* Additional Info */}
+                    {/* Additional Info (Requirements / Benefits) */}
                     <div className="grid grid-cols-2 gap-4">
                       <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
                         <p className="text-xs font-bold text-slate-500 uppercase mb-3">Requirements</p>
-                        <ul className="space-y-2">
-                          <li className="flex items-start gap-2 text-sm text-slate-700">
-                            <CheckCircle2 size={16} className="text-green-500 flex-shrink-0 mt-0.5"/>
-                            <span>Experience level requirements</span>
-                          </li>
-                          <li className="flex items-start gap-2 text-sm text-slate-700">
-                            <CheckCircle2 size={16} className="text-green-500 flex-shrink-0 mt-0.5"/>
-                            <span>Required certifications</span>
-                          </li>
-                          <li className="flex items-start gap-2 text-sm text-slate-400 italic">
-                            <AlertCircle size={16} className="flex-shrink-0 mt-0.5"/>
-                            <span>Add specific requirements</span>
-                          </li>
-                        </ul>
+                        <RequirementsBenefitsSelector 
+                          type="requirements" 
+                          value={isEditing ? editForm.requirements : position?.requirements || []} 
+                          onChange={(vals) => setEditForm({...editForm, requirements: vals})}
+                          placeholder="Add required skills..."
+                        />
                       </div>
 
                       <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
                         <p className="text-xs font-bold text-slate-500 uppercase mb-3">Benefits</p>
-                        <ul className="space-y-2">
-                          <li className="flex items-start gap-2 text-sm text-slate-700">
-                            <Award size={16} className="text-blue-500 flex-shrink-0 mt-0.5"/>
-                            <span>Health insurance</span>
-                          </li>
-                          <li className="flex items-start gap-2 text-sm text-slate-700">
-                            <Award size={16} className="text-blue-500 flex-shrink-0 mt-0.5"/>
-                            <span>401(k) matching</span>
-                          </li>
-                          <li className="flex items-start gap-2 text-sm text-slate-400 italic">
-                            <AlertCircle size={16} className="flex-shrink-0 mt-0.5"/>
-                            <span>Add company benefits</span>
-                          </li>
-                        </ul>
+                        <RequirementsBenefitsSelector 
+                          type="benefits" 
+                          value={isEditing ? editForm.benefits : position?.benefits || []} 
+                          onChange={(vals) => setEditForm({...editForm, benefits: vals})}
+                          placeholder="Add perks..."
+                        />
                       </div>
                     </div>
 
                   </div>
 
-                  {/* Right Column: Meta & Context */}
+                  {/* Right Column: Meta & AI Matching */}
                   <div className="col-span-4 space-y-5">
                     
+                    {/* AI Talent Matching Section */}
+                    <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm ring-4 ring-purple-50">
+                      <div className="flex items-center justify-between mb-4">
+                        <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wide flex items-center gap-2">
+                          <Sparkles size={14} className="text-purple-500"/> AI Talent Matching
+                        </h4>
+                      </div>
+                      <SuggestedCandidates 
+                        positionSkills={position?.skills || []} 
+                        positionId={positionId!} 
+                        onLink={fetchPipeline}
+                      />
+                      
+                      <div className="pt-6 mt-6 border-t border-slate-100">
+                        <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Manual Link</h4>
+                        <ManualCandidateLink positionId={positionId!} onLink={fetchPipeline} />
+                      </div>
+                    </div>
+
                     {/* Status Card */}
                     <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
                       <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-4 flex items-center gap-2">
@@ -780,31 +891,6 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
                     ))}
                   </div>
 
-                  {/* Header Actions */}
-                  <div className="flex justify-between items-center">
-                    <div className="flex items-center gap-3">
-                      <h3 className="text-lg font-bold text-slate-900">Active Candidates</h3>
-                      <div className="flex gap-1 bg-slate-100 p-1 rounded-lg">
-                        {['all', 'submitted', 'screening', 'interview', 'offer'].map(filter => (
-                          <button
-                            key={filter}
-                            onClick={() => setPipelineFilter(filter)}
-                            className={`px-3 py-1 rounded-md text-xs font-bold capitalize transition-all ${
-                              pipelineFilter === filter 
-                                ? 'bg-white shadow-sm text-slate-900' 
-                                : 'text-slate-500 hover:text-slate-700'
-                            }`}
-                          >
-                            {filter}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <button className="bg-slate-900 text-white px-4 py-2.5 rounded-lg text-sm font-bold hover:bg-slate-800 flex items-center gap-2 shadow-sm transition-all">
-                      <Plus size={16}/> Add Candidate
-                    </button>
-                  </div>
-
                   {/* Candidates Grid */}
                   {filteredPipeline.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-20 bg-white rounded-2xl border-2 border-dashed border-slate-300">
@@ -812,23 +898,17 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
                         <Users size={40} className="text-slate-300"/>
                       </div>
                       <p className="text-slate-600 font-bold text-lg">No candidates yet</p>
-                      <p className="text-sm text-slate-500 mt-1 mb-4">Start submitting candidates to build your pipeline</p>
-                      <button className="bg-blue-600 text-white px-5 py-2.5 rounded-lg text-sm font-bold hover:bg-blue-700 flex items-center gap-2 shadow-lg shadow-blue-200">
-                        <Plus size={16}/> Submit First Candidate
-                      </button>
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                       {filteredPipeline.map(sub => (
                         <div key={sub.id} className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:shadow-lg transition-all group cursor-pointer relative overflow-hidden">
-                          {/* Stage indicator */}
                           <div className={`absolute top-0 left-0 w-1.5 h-full ${
                             sub.stage === 'Offer' ? 'bg-green-500' : 
                             sub.stage === 'Interview' ? 'bg-indigo-500' :
                             sub.stage === 'Screening' ? 'bg-purple-500' : 'bg-blue-500'
                           }`}></div>
                           
-                          {/* Header */}
                           <div className="flex justify-between items-start mb-4 pl-2">
                             <div className="flex items-center gap-3 flex-1 min-w-0">
                               <div className="w-11 h-11 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center text-white font-bold text-lg shadow-md flex-shrink-0">
@@ -844,7 +924,6 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
                             </button>
                           </div>
 
-                          {/* Info Grid */}
                           <div className="pl-2 space-y-3">
                             <div className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border ${getStageColor(sub.stage)}`}>
                               <div className="w-1.5 h-1.5 rounded-full bg-current"></div>
@@ -865,34 +944,19 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
                               </div>
                             )}
 
-                            {/* Contact Info */}
                             <div className="flex items-center gap-2 pt-3 border-t border-slate-100">
                               {sub.candidate?.email && (
-                                <a 
-                                  href={`mailto:${sub.candidate.email}`}
-                                  className="p-1.5 bg-slate-50 hover:bg-blue-50 text-slate-600 hover:text-blue-600 rounded transition-colors"
-                                  onClick={e => e.stopPropagation()}
-                                >
+                                <a href={`mailto:${sub.candidate.email}`} className="p-1.5 bg-slate-50 hover:bg-blue-50 text-slate-600 hover:text-blue-600 rounded transition-colors" onClick={e => e.stopPropagation()}>
                                   <Mail size={14}/>
                                 </a>
                               )}
                               {sub.candidate?.phone && (
-                                <a 
-                                  href={`tel:${sub.candidate.phone}`}
-                                  className="p-1.5 bg-slate-50 hover:bg-green-50 text-slate-600 hover:text-green-600 rounded transition-colors"
-                                  onClick={e => e.stopPropagation()}
-                                >
+                                <a href={`tel:${sub.candidate.phone}`} className="p-1.5 bg-slate-50 hover:bg-green-50 text-slate-600 hover:text-green-600 rounded transition-colors" onClick={e => e.stopPropagation()}>
                                   <Phone size={14}/>
                                 </a>
                               )}
                               {sub.candidate?.linkedin_url && (
-                                <a 
-                                  href={sub.candidate.linkedin_url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="p-1.5 bg-slate-50 hover:bg-blue-50 text-slate-600 hover:text-blue-600 rounded transition-colors"
-                                  onClick={e => e.stopPropagation()}
-                                >
+                                <a href={sub.candidate.linkedin_url} target="_blank" rel="noopener noreferrer" className="p-1.5 bg-slate-50 hover:bg-blue-50 text-slate-600 hover:text-blue-600 rounded transition-colors" onClick={e => e.stopPropagation()}>
                                   <Linkedin size={14}/>
                                 </a>
                               )}
@@ -915,8 +979,6 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
               {/* === TAB: ACTIVITY === */}
               {activeTab === 'activity' && (
                 <div className="max-w-3xl mx-auto animate-in fade-in slide-in-from-bottom-2 duration-300">
-                  
-                  {/* Add Note */}
                   <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm mb-8">
                     <div className="flex items-start gap-3 mb-3">
                       <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center text-white font-bold flex-shrink-0">
@@ -924,86 +986,39 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
                       </div>
                       <textarea 
                         className="flex-1 p-3 text-sm border border-slate-200 rounded-lg resize-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                        placeholder="Add an internal note, update, or comment..."
+                        placeholder="Add an internal note..."
                         rows={3}
                         value={newLog}
                         onChange={e => setNewLog(e.target.value)}
                       />
                     </div>
-                    <div className="flex justify-between items-center pl-14">
-                      <div className="flex gap-2">
-                        <button className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-lg transition-colors" title="Private note">
-                          <Lock size={16}/>
-                        </button>
-                        <button className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-lg transition-colors" title="Add tag">
-                          <Tag size={16}/>
-                        </button>
-                      </div>
+                    <div className="flex justify-end">
                       <button 
                         onClick={handleAddLog}
                         disabled={!newLog.trim()}
-                        className="bg-blue-600 disabled:bg-slate-300 text-white px-5 py-2 rounded-lg text-sm font-bold hover:bg-blue-700 disabled:hover:bg-slate-300 flex items-center gap-2 transition-all shadow-sm disabled:cursor-not-allowed"
+                        className="bg-blue-600 disabled:bg-slate-300 text-white px-5 py-2 rounded-lg text-sm font-bold hover:bg-blue-700 transition-all shadow-sm disabled:cursor-not-allowed"
                       >
                         <Send size={14}/> Post Note
                       </button>
                     </div>
                   </div>
 
-                  {/* Activity Timeline */}
                   <div className="space-y-6 relative before:absolute before:left-[22px] before:top-0 before:bottom-0 before:w-0.5 before:bg-slate-200">
-                    {logs.length === 0 && (
-                      <div className="text-center py-12 bg-white rounded-xl border border-dashed border-slate-300">
-                        <Activity size={32} className="text-slate-300 mx-auto mb-3"/>
-                        <p className="text-slate-500 font-medium">No activity logged yet</p>
-                        <p className="text-xs text-slate-400 mt-1">Updates and notes will appear here</p>
-                      </div>
-                    )}
-                    
-                    {logs.map((log, idx) => {
-                      const getLogIcon = (action: string) => {
-                        switch(action) {
-                          case 'status_change': return <Activity size={14}/>;
-                          case 'created': return <Plus size={14}/>;
-                          case 'note': return <MessageSquare size={14}/>;
-                          case 'updated': return <Edit3 size={14}/>;
-                          default: return <Clock size={14}/>;
-                        }
-                      };
-
-                      const getLogColor = (action: string) => {
-                        switch(action) {
-                          case 'status_change': return 'bg-blue-500 ring-blue-100';
-                          case 'created': return 'bg-green-500 ring-green-100';
-                          case 'note': return 'bg-purple-500 ring-purple-100';
-                          case 'updated': return 'bg-orange-500 ring-orange-100';
-                          default: return 'bg-slate-400 ring-slate-100';
-                        }
-                      };
-
-                      return (
-                        <div key={log.id || idx} className="relative pl-14 group">
-                          <div className={`absolute left-[15px] top-2 w-3.5 h-3.5 rounded-full ${getLogColor(log.action)} border-2 border-white shadow-sm ring-2 flex items-center justify-center text-white`}>
-                            {/* Icon would go here if needed */}
-                          </div>
-                          <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-all">
-                            <div className="flex justify-between items-start mb-2">
-                              <div className="flex items-center gap-2">
-                                <span className="font-bold text-slate-900 text-sm">{log.user || "System"}</span>
-                                <span className="text-xs text-slate-400">•</span>
-                                <span className="text-xs text-slate-500 font-medium capitalize">{log.action?.replace('_', ' ')}</span>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs text-slate-400">{getRelativeTime(log.created_at)}</span>
-                                <button className="opacity-0 group-hover:opacity-100 p-1 hover:bg-slate-100 rounded transition-all">
-                                  <MoreHorizontal size={14} className="text-slate-400"/>
-                                </button>
-                              </div>
+                    {logs.map((log, idx) => (
+                      <div key={log.id || idx} className="relative pl-14 group">
+                        <div className="absolute left-[15px] top-2 w-3.5 h-3.5 rounded-full bg-slate-400 border-2 border-white shadow-sm ring-2"></div>
+                        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-all">
+                          <div className="flex justify-between items-start mb-2">
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-slate-900 text-sm">{log.user || "System"}</span>
+                              <span className="text-xs text-slate-500 font-medium capitalize">{log.action?.replace('_', ' ')}</span>
                             </div>
-                            <p className="text-sm text-slate-700 leading-relaxed">{log.description}</p>
+                            <span className="text-xs text-slate-400">{getRelativeTime(log.created_at)}</span>
                           </div>
+                          <p className="text-sm text-slate-700 leading-relaxed">{log.description}</p>
                         </div>
-                      );
-                    })}
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}

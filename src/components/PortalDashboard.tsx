@@ -78,7 +78,7 @@ function PortalDashboardContent() {
       }
     }
     loadPortal();
-  }, [impersonateId]); // Added dependency to reload on param change
+  }, [impersonateId]); 
 
   const toggleTheme = () => {
     const newTheme = themeMode === 'dark' ? 'light' : 'dark';
@@ -102,20 +102,45 @@ function PortalDashboardContent() {
       return;
     }
 
-    const [clientRes, candsRes, notesRes] = await Promise.all([
-      supabase.from('clients').select('*, client_portal_settings(*)').eq('id', targetClientId).single(),
-      supabase.from('candidates').select('*').eq('client_id', targetClientId).order('created_at'),
-      supabase.from('portal_notes').select('*, profiles(email)').eq('client_id', targetClientId).order('created_at', { ascending: false })
-    ]);
+    // 1. Fetch Client Info & Settings
+    const { data: clientRes } = await supabase.from('clients').select('*, client_portal_settings(*)').eq('id', targetClientId).single();
+    
+    // 2. Fetch SAFE Candidate Data via Submissions (Security Update)
+    // We only select fields that are safe for client view, excluding salary_expectations, fees, etc. unless explicitly needed.
+    const { data: submissions } = await supabase
+      .from('client_submissions')
+      .select(`
+        id,
+        stage,
+        status,
+        created_at,
+        feedback,
+        candidate:candidates (
+          id,
+          name, 
+          role, 
+          summary, 
+          skills, 
+          experience_years,
+          location,
+          country_emoji, 
+          avatar_color
+        )
+      `)
+      .eq('client_id', targetClientId)
+      .neq('status', 'Withdrawn');
 
-    if (clientRes.data) {
-      setClientInfo(clientRes.data);
-      setPortalSettings(clientRes.data.client_portal_settings);
+    // 3. Fetch Notes
+    const { data: notesRes } = await supabase.from('portal_notes').select('*, profiles(email)').eq('client_id', targetClientId).order('created_at', { ascending: false });
+
+    if (clientRes) {
+      setClientInfo(clientRes);
+      setPortalSettings(clientRes.client_portal_settings);
       setTempLook({
-        primary_color: clientRes.data.client_portal_settings?.primary_color || '#2563eb',
-        welcome_message: clientRes.data.client_portal_settings?.welcome_message || 'Welcome',
-        account_manager_name: clientRes.data.client_portal_settings?.account_manager_name || 'PlaceByte Team',
-        account_manager_email: clientRes.data.client_portal_settings?.account_manager_email || 'team@placebyte.com'
+        primary_color: clientRes.client_portal_settings?.primary_color || '#2563eb',
+        welcome_message: clientRes.client_portal_settings?.welcome_message || 'Welcome',
+        account_manager_name: clientRes.client_portal_settings?.account_manager_name || 'PlaceByte Team',
+        account_manager_email: clientRes.client_portal_settings?.account_manager_email || 'team@placebyte.com'
       });
 
       // SECURITY LOGGING
@@ -125,14 +150,24 @@ function PortalDashboardContent() {
           p_user_id: session?.user.id,
           p_metadata: { 
             target_client_id: targetClientId, 
-            target_client_name: clientRes.data.name 
+            target_client_name: clientRes.name 
           },
           p_severity: 'warning'
         });
       }
     }
-    setCandidates(candsRes.data || []);
-    setNotes(notesRes.data || []);
+
+    // Remap submissions to flatten for UI usage
+    const safeCandidates = submissions?.map((sub: any) => ({
+      ...sub.candidate, // Base candidate info
+      submission_id: sub.id,
+      stage: sub.stage,   // Use pipeline stage, not candidate global status
+      status: sub.status,
+      client_feedback: sub.feedback
+    })) || [];
+
+    setCandidates(safeCandidates);
+    setNotes(notesRes || []);
     
     setTimeout(() => setLoading(false), 800);
   };
@@ -140,17 +175,32 @@ function PortalDashboardContent() {
   // --- ACTIONS ---
   const handleFeedback = async (type: 'Interested' | 'Not a fit' | 'Question') => {
     if (!selectedCandidate) return;
-    await supabase.from('candidates').update({ client_feedback: type }).eq('id', selectedCandidate.id);
+    
+    // Update Submission Record, not global candidate status
+    await supabase.from('client_submissions').update({ feedback: type }).eq('id', selectedCandidate.submission_id);
+    
+    // Log Activity
     await supabase.from('candidate_activity').insert([{
-      candidate_id: selectedCandidate.id, author_id: userProfile?.id || null, action_type: 'Feedback', description: `Marked as ${type}`
+      candidate_id: selectedCandidate.id, 
+      author_id: userProfile?.id || null, 
+      action_type: 'Feedback', 
+      description: `Client marked as ${type}`
     }]);
+
     setSelectedCandidate({ ...selectedCandidate, client_feedback: type });
     setCandidates(prev => prev.map(c => c.id === selectedCandidate.id ? { ...c, client_feedback: type } : c));
     loadTimeline(selectedCandidate.id);
   };
 
   const loadTimeline = async (candidateId: string) => {
-    const { data } = await supabase.from('candidate_activity').select('*, profiles(email)').eq('candidate_id', candidateId).order('created_at', { ascending: false });
+    // Only show client-visible activity or specific types
+    const { data } = await supabase
+      .from('candidate_activity')
+      .select('*, profiles(email)')
+      .eq('candidate_id', candidateId)
+      .in('action_type', ['Submitted to Client', 'Feedback', 'Note']) // Filter types
+      .order('created_at', { ascending: false });
+    
     setTimeline(data || []);
   };
 
@@ -366,13 +416,16 @@ function PortalDashboardContent() {
           <div className={`lg:col-span-8 p-6 rounded-2xl shadow-sm flex flex-col ${cardColor}`}>
             <div className="flex justify-between items-center mb-6">
               <h3 className="font-bold text-base flex items-center gap-2">Updates</h3>
-              <button 
-                onClick={() => setShowNoteModal(true)}
-                className={`text-xs font-bold px-4 py-2 rounded-lg flex items-center gap-2 transition-all hover:opacity-90 text-white shadow-sm`}
-                style={{ backgroundColor: primaryColor }}
-              >
-                <Plus size={14}/> Add Note
-              </button>
+              {/* Clients cannot add notes, only internal team */}
+              {isInternal && (
+                <button 
+                  onClick={() => setShowNoteModal(true)}
+                  className={`text-xs font-bold px-4 py-2 rounded-lg flex items-center gap-2 transition-all hover:opacity-90 text-white shadow-sm`}
+                  style={{ backgroundColor: primaryColor }}
+                >
+                  <Plus size={14}/> Add Note
+                </button>
+              )}
             </div>
             
             <div className={`flex-1 space-y-3 max-h-64 overflow-y-auto custom-scrollbar pr-2`}>
@@ -395,12 +448,14 @@ function PortalDashboardContent() {
                     <div className="flex items-center gap-3">
                       <span className="text-[10px] font-medium opacity-30">{new Date(note.created_at).toLocaleDateString()}</span>
                       
-                      <button 
-                        onClick={() => handleDeleteNote(note.id)} 
-                        className="flex items-center gap-1.5 text-red-500 bg-transparent hover:bg-red-50 dark:hover:bg-red-900/20 py-1 px-1.5 rounded transition-all opacity-0 group-hover/note:opacity-100"
-                      >
-                        <Trash2 size={12}/>
-                      </button>
+                      {isInternal && (
+                        <button 
+                          onClick={() => handleDeleteNote(note.id)} 
+                          className="flex items-center gap-1.5 text-red-500 bg-transparent hover:bg-red-50 dark:hover:bg-red-900/20 py-1 px-1.5 rounded transition-all opacity-0 group-hover/note:opacity-100"
+                        >
+                          <Trash2 size={12}/>
+                        </button>
+                      )}
                     </div>
                   </div>
                   <p className={`leading-relaxed pl-8 ${isDark ? 'text-gray-400' : 'text-gray-600'}`}>{note.content}</p>
@@ -431,7 +486,7 @@ function PortalDashboardContent() {
                 <div className="space-y-3 overflow-y-auto flex-1 px-2 custom-scrollbar">
                   {candidates.filter(c => c.stage === stage).map(candidate => (
                     <div 
-                      key={candidate.id} 
+                      key={candidate.submission_id || candidate.id} 
                       onClick={() => { setSelectedCandidate(candidate); loadTimeline(candidate.id); }}
                       className={`p-5 rounded-xl border cursor-pointer transition-all hover:shadow-md group relative ${cardColor} hover:border-slate-300 dark:hover:border-slate-600`}
                     >
@@ -459,7 +514,7 @@ function PortalDashboardContent() {
                       </div>
                       
                       <div className={`mt-4 pt-3 border-t flex justify-between items-center text-[10px] opacity-40 group-hover:opacity-70 transition-opacity ${isDark ? 'border-slate-800' : 'border-slate-100'}`}>
-                          <span className="flex items-center gap-1"><Clock size={10}/> 2d ago</span>
+                          <span className="flex items-center gap-1"><Clock size={10}/> {new Date(candidate.created_at || Date.now()).toLocaleDateString()}</span>
                           <ChevronRight size={12}/>
                       </div>
                     </div>
@@ -520,11 +575,25 @@ function PortalDashboardContent() {
                 </div>
 
                 <div>
-                  <h4 className={`text-xs font-bold uppercase tracking-widest mb-3 ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>Notes</h4>
+                  <h4 className={`text-xs font-bold uppercase tracking-widest mb-3 ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>Professional Summary</h4>
                   <div className={`text-sm p-6 rounded-xl border leading-relaxed ${isDark ? 'bg-slate-900 border-slate-800 text-slate-300' : 'bg-slate-50 border-slate-100 text-slate-600'}`}>
-                    {selectedCandidate.notes || "No internal notes shared."}
+                    {selectedCandidate.summary || "No summary available."}
                   </div>
                 </div>
+
+                {/* Candidate Skills Tag Cloud */}
+                {selectedCandidate.skills && selectedCandidate.skills.length > 0 && (
+                    <div>
+                        <h4 className={`text-xs font-bold uppercase tracking-widest mb-3 ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>Skills</h4>
+                        <div className="flex flex-wrap gap-2">
+                            {selectedCandidate.skills.map((skill: string, i: number) => (
+                                <span key={i} className={`px-2 py-1 rounded text-xs font-medium border ${isDark ? 'bg-slate-800 border-slate-700 text-slate-300' : 'bg-slate-100 border-slate-200 text-slate-700'}`}>
+                                    {skill}
+                                </span>
+                            ))}
+                        </div>
+                    </div>
+                )}
               </div>
 
               <div className={`border-l pl-8 relative ${isDark ? 'border-slate-800' : 'border-slate-100'}`}>
@@ -549,8 +618,8 @@ function PortalDashboardContent() {
         </div>
       )}
 
-      {/* CUSTOMIZE MODAL */}
-      {showEditLook && (
+      {/* CUSTOMIZE MODAL - Only for Internal Users */}
+      {showEditLook && isInternal && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xl flex items-center justify-center z-[100] p-4" onClick={(e) => handleBackdropClick(e, () => setShowEditLook(false))}>
           <div className={`rounded-2xl w-full max-w-lg shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden flex flex-col max-h-[80vh] ${cardBg} ${isDark ? 'text-white' : 'text-slate-900'}`}>
             <div className={`p-6 border-b flex justify-between items-center ${isDark ? 'border-slate-800 bg-slate-900' : 'border-slate-100 bg-slate-50'}`}>
