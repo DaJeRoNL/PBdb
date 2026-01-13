@@ -3,7 +3,11 @@ import { supabase } from "@/lib/supabaseClient";
 import { 
   X, Save, Building2, MapPin, DollarSign, Lock, Users, Edit3, 
   Target, Globe, Briefcase, ChevronDown, Clock, Activity, 
-  CheckCircle2, AlertCircle, Send, MoreHorizontal, Loader2
+  CheckCircle2, AlertCircle, Send, MoreHorizontal, Loader2,
+  Calendar, TrendingUp, Eye, Share2, Archive, Trash2,
+  Phone, Mail, Linkedin, ExternalLink, Plus, MessageSquare,
+  Star, Award, Filter, Download, Upload, Link as LinkIcon,
+  Zap, AlertTriangle, FileText, Tag, Copy, Check
 } from "lucide-react";
 
 interface PositionDetailSheetProps {
@@ -17,6 +21,21 @@ const formatCurrency = (amount: number) => {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(amount);
 };
 
+// Helper for relative time
+const getRelativeTime = (dateString: string) => {
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return `${diffDays}d ago`;
+  if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
+  if (diffDays < 365) return `${Math.floor(diffDays / 30)}mo ago`;
+  return date.toLocaleDateString();
+};
+
 export default function PositionDetailSheet({ positionId, onClose, onUpdate }: PositionDetailSheetProps) {
   const [position, setPosition] = useState<any>(null);
   const [pipeline, setPipeline] = useState<any[]>([]);
@@ -24,8 +43,12 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<any>({});
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'pipeline' | 'activity'>('overview');
   const [newLog, setNewLog] = useState("");
+  const [showActions, setShowActions] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [pipelineFilter, setPipelineFilter] = useState<string>('all');
   
   // Animation & Gesture State
   const [isVisible, setIsVisible] = useState(false);
@@ -35,14 +58,16 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
   useEffect(() => {
     if (positionId) {
       setIsVisible(true);
+      setLoading(true);
       fetchPosition();
       fetchPipeline();
+      fetchActivityLogs();
     } else {
       setIsVisible(false);
-      // Delay clearing data until animation completes
       const timer = setTimeout(() => {
         setPosition(null);
-        setActiveTab('overview'); // Reset tab
+        setActiveTab('overview');
+        setIsEditing(false);
       }, 300);
       return () => clearTimeout(timer);
     }
@@ -51,15 +76,13 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
   const fetchPosition = async () => {
     if (!positionId) return;
     
-    // Attempt 1: Fetch with Relations
-    // We use a try/catch block here to ensure we catch ANY error, network or Supabase
     try {
       const { data, error } = await supabase
         .from('positions')
         .select(`
           *, 
-          client:clients(id, name, description, industry, website, location), 
-          owner:profiles(email)
+          client:clients(id, name, description, website, location), 
+          owner:profiles(id, email, full_name)
         `)
         .eq('id', positionId)
         .single();
@@ -68,29 +91,42 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
 
       if (data) {
         setPosition(data);
-        setEditForm(data);
+        setEditForm({
+          ...data,
+          location: data.location || '',
+          description: data.description || '',
+          title: data.title || '',
+          company_intel: data.company_intel || '',
+          requirements: data.requirements || '',
+          benefits: data.benefits || '',
+        });
       }
     } catch (err) {
-       console.warn("Complex fetch failed, falling back to simple fetch.", err);
-       
-       // Attempt 2: Fallback (Simple Fetch + Manual Client Fetch)
-       const { data: simpleData } = await supabase
+      console.warn("Complex fetch failed, falling back to simple fetch.", err);
+      
+      const { data: simpleData } = await supabase
         .from('positions')
         .select('*')
         .eq('id', positionId)
         .single();
-       
-       if (simpleData) {
-           let clientData = {};
-           if (simpleData.client_id) {
-             const { data: c } = await supabase.from('clients').select('name, description, website, industry, location').eq('id', simpleData.client_id).single();
-             if (c) clientData = c;
-           }
-           
-           const completeData = { ...simpleData, client: clientData };
-           setPosition(completeData);
-           setEditForm(completeData);
-       }
+      
+      if (simpleData) {
+        let clientData = {};
+        if (simpleData.client_id) {
+          const { data: c } = await supabase
+            .from('clients')
+            .select('name, description, website, location')
+            .eq('id', simpleData.client_id)
+            .single();
+          if (c) clientData = c;
+        }
+        
+        const completeData = { ...simpleData, client: clientData };
+        setPosition(completeData);
+        setEditForm(completeData);
+      }
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -98,62 +134,104 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
     if (!positionId) return;
     const { data } = await supabase
       .from('client_submissions')
-      .select('*, candidate:candidates(id, name, role, avatar_color)')
+      .select('*, candidate:candidates(id, name, email, phone, linkedin_url, current_role, experience_years, location)')
       .eq('position_id', positionId)
       .order('created_at', { ascending: false });
     if (data) setPipeline(data);
   };
 
+  const fetchActivityLogs = async () => {
+    if (!positionId) return;
+    // Fetch activity logs if you have an activity_logs table
+    // For now, we'll use mock data
+    const mockLogs = [
+      {
+        id: 1,
+        user: "Sarah Chen",
+        action: "status_change",
+        description: "Updated position status to Open",
+        created_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+      },
+      {
+        id: 2,
+        user: "System",
+        action: "created",
+        description: "Position created",
+        created_at: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+      }
+    ];
+    setLogs(mockLogs);
+  };
+
   const handleSave = async () => {
-    setLoading(true);
+    setSaving(true);
     const { error } = await supabase.from('positions').update({
-        status: editForm.status,
-        description: editForm.description,
-        priority: editForm.priority,
-        location: editForm.location,
-        salary_min: editForm.salary_min,
-        salary_max: editForm.salary_max
+      status: editForm.status,
+      description: editForm.description,
+      priority: editForm.priority,
+      location: editForm.location,
+      salary_min: editForm.salary_min,
+      salary_max: editForm.salary_max,
+      title: editForm.title,
     }).eq('id', positionId);
 
     if (!error) {
-        setIsEditing(false);
-        fetchPosition();
-        onUpdate();
+      setIsEditing(false);
+      await fetchPosition();
+      onUpdate();
+      
+      // Add activity log
+      const logEntry = {
+        id: Date.now(),
+        user: "You",
+        action: "updated",
+        description: "Updated position details",
+        created_at: new Date().toISOString(),
+      };
+      setLogs([logEntry, ...logs]);
     } else {
-        alert("Error saving: " + error.message);
+      alert("Error saving: " + error.message);
     }
-    setLoading(false);
+    setSaving(false);
   };
 
   const handleAddLog = async () => {
-    if(!newLog.trim()) return;
-    const mockLog = {
-        id: Date.now(),
-        description: newLog,
-        created_at: new Date().toISOString(),
-        user: "Me"
+    if (!newLog.trim()) return;
+    
+    const logEntry = {
+      id: Date.now(),
+      user: "You",
+      action: "note",
+      description: newLog,
+      created_at: new Date().toISOString(),
     };
-    setLogs([mockLog, ...logs]);
+    
+    setLogs([logEntry, ...logs]);
     setNewLog("");
   };
 
-  const closeSheet = () => {
-      setIsVisible(false);
-      setTimeout(onClose, 300);
+  const handleCopyLink = () => {
+    const link = `${window.location.origin}/placebyte/positions?positionId=${positionId}`;
+    navigator.clipboard.writeText(link);
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 2000);
   };
 
-  // Handle "Pull Down" on the content to close
+  const closeSheet = () => {
+    setIsVisible(false);
+    setTimeout(onClose, 300);
+  };
+
   const handleContentScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const scrollTop = e.currentTarget.scrollTop;
-    if (scrollTop < -60) { // Detect overscroll at top
-        closeSheet();
+    if (scrollTop < -60) {
+      closeSheet();
     }
   };
 
-  // Close on Escape key
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-        if (e.key === 'Escape') closeSheet();
+      if (e.key === 'Escape') closeSheet();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -162,317 +240,786 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
   if (!positionId && !isVisible) return null;
 
   const calculateFee = () => {
+    if (!position) return '$0';
     if (position?.product_type === 'fixed') return formatCurrency(position.fee_fixed || 0);
-    const mid = ((Number(position?.salary_min)||0) + (Number(position?.salary_max)||0)) / 2;
-    return `~${formatCurrency(mid * ((Number(position?.fee_percentage)||0)/100))}`;
+    const mid = ((Number(position?.salary_min) || 0) + (Number(position?.salary_max) || 0)) / 2;
+    return formatCurrency(mid * ((Number(position?.fee_percentage) || 0) / 100));
+  };
+
+  const getStatusColor = (status: string) => {
+    const colors: Record<string, string> = {
+      'Open': 'bg-green-500',
+      'Filled': 'bg-blue-500',
+      'On Hold': 'bg-yellow-500',
+      'Cancelled': 'bg-slate-400',
+    };
+    return colors[status] || 'bg-slate-400';
+  };
+
+  const getPriorityColor = (priority: string) => {
+    const colors: Record<string, { bg: string; text: string; border: string }> = {
+      'Urgent': { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-200' },
+      'High': { bg: 'bg-orange-50', text: 'text-orange-700', border: 'border-orange-200' },
+      'Medium': { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200' },
+      'Low': { bg: 'bg-slate-50', text: 'text-slate-600', border: 'border-slate-200' },
+    };
+    return colors[priority] || colors['Medium'];
+  };
+
+  const getStageColor = (stage: string) => {
+    const colors: Record<string, string> = {
+      'Submitted': 'bg-blue-50 text-blue-700 border-blue-200',
+      'Screening': 'bg-purple-50 text-purple-700 border-purple-200',
+      'Interview': 'bg-indigo-50 text-indigo-700 border-indigo-200',
+      'Offer': 'bg-green-50 text-green-700 border-green-200',
+      'Rejected': 'bg-red-50 text-red-700 border-red-200',
+    };
+    return colors[stage] || 'bg-slate-50 text-slate-700 border-slate-200';
+  };
+
+  const filteredPipeline = pipelineFilter === 'all' 
+    ? pipeline 
+    : pipeline.filter(p => p.stage?.toLowerCase() === pipelineFilter.toLowerCase());
+
+  const pipelineStats = {
+    total: pipeline.length,
+    submitted: pipeline.filter(p => p.stage === 'Submitted').length,
+    screening: pipeline.filter(p => p.stage === 'Screening').length,
+    interview: pipeline.filter(p => p.stage === 'Interview').length,
+    offer: pipeline.filter(p => p.stage === 'Offer').length,
   };
 
   return (
-    <div className={`fixed inset-0 z-[100] flex flex-col justify-end transition-colors duration-500 ${isVisible ? 'bg-slate-900/40 backdrop-blur-sm' : 'bg-transparent pointer-events-none'}`}>
+    <div className={`fixed inset-0 z-[100] flex flex-col justify-end transition-all duration-300 ${isVisible ? 'bg-slate-900/50 backdrop-blur-sm' : 'bg-transparent pointer-events-none'}`}>
        
-       {/* Backdrop Click Zone */}
-       <div className="absolute inset-0" onClick={closeSheet}></div>
-       
-       {/* Bottom Sheet - Reduced Height (75vh) */}
-       <div 
-         ref={sheetRef}
-         className={`
-            relative w-full h-[75vh] bg-white rounded-t-[2rem] flex flex-col shadow-[0_-10px_40px_-15px_rgba(0,0,0,0.2)] overflow-hidden
-            transform transition-transform duration-500 cubic-bezier(0.19, 1, 0.22, 1)
-            ${isVisible ? 'translate-y-0' : 'translate-y-full'}
-         `}
-       >
-          {/* Drag Handle Area - Click/Pull to Close */}
-          <div 
-            className="w-full h-8 flex items-center justify-center cursor-pointer hover:bg-gray-50 active:bg-gray-100 transition-colors bg-white flex-shrink-0 border-b border-transparent hover:border-gray-100 touch-none" 
-            onClick={closeSheet}
-          >
-             <div className="w-16 h-1.5 bg-slate-300 rounded-full"></div>
-          </div>
+      {/* Backdrop */}
+      <div className="absolute inset-0" onClick={closeSheet}></div>
+      
+      {/* Bottom Sheet */}
+      <div 
+        ref={sheetRef}
+        className={`
+          relative w-full h-[85vh] bg-white rounded-t-3xl flex flex-col shadow-2xl overflow-hidden
+          transform transition-all duration-500 ease-out
+          ${isVisible ? 'translate-y-0 opacity-100' : 'translate-y-full opacity-0'}
+        `}
+      >
+        {/* Drag Handle */}
+        <div 
+          className="w-full h-6 flex items-center justify-center cursor-pointer hover:bg-slate-50 active:bg-slate-100 transition-colors flex-shrink-0 group" 
+          onClick={closeSheet}
+        >
+          <div className="w-12 h-1 bg-slate-300 rounded-full group-hover:bg-slate-400 transition-colors"></div>
+        </div>
 
-          {/* Header */}
-          <div className="px-8 pb-6 pt-2 border-b border-slate-100 flex justify-between items-start bg-white z-10 flex-shrink-0">
-             {position ? (
-                 <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-3 mb-2">
-                       <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide border ${position.priority === 'Urgent' ? 'bg-red-50 text-red-600 border-red-200' : 'bg-blue-50 text-blue-600 border-blue-200'}`}>
-                          {position.priority}
-                       </span>
-                       <div className="h-4 w-px bg-slate-200"></div>
-                       {position.client?.website ? (
-                           <a href={`https://${position.client?.website}`} target="_blank" className="text-sm text-slate-500 font-medium flex items-center gap-1.5 hover:text-blue-600 transition-colors truncate">
-                              <Building2 size={14}/> {position.client?.name}
-                           </a>
-                       ) : (
-                           <span className="text-sm text-slate-500 font-medium flex items-center gap-1.5 truncate">
-                              <Building2 size={14}/> {position.client?.name || 'Unknown Client'}
-                           </span>
-                       )}
-                    </div>
-                    <h2 className="text-3xl font-bold text-slate-900 leading-tight truncate pr-4">{position.title}</h2>
-                 </div>
-             ) : (
-                 <div className="flex-1 animate-pulse">
-                    <div className="h-4 w-24 bg-slate-100 rounded mb-2"></div>
-                    <div className="h-8 w-64 bg-slate-100 rounded"></div>
-                 </div>
-             )}
-             
-             <div className="flex items-center gap-3 flex-shrink-0">
-                {!isEditing ? (
-                    <button onClick={() => setIsEditing(true)} className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-sm transition-colors">
-                        <Edit3 size={16}/> Edit
-                    </button>
+        {/* Header */}
+        <div className="px-8 py-4 border-b border-slate-200 flex justify-between items-start bg-white z-20 flex-shrink-0">
+          {position ? (
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-3 mb-3">
+                <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide border ${getPriorityColor(position.priority).bg} ${getPriorityColor(position.priority).text} ${getPriorityColor(position.priority).border}`}>
+                  {position.priority}
+                </span>
+                
+                <div className="h-4 w-px bg-slate-200"></div>
+                
+                {position.client?.website ? (
+                  <a 
+                    href={`https://${position.client.website}`} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="text-sm text-slate-600 font-medium flex items-center gap-1.5 hover:text-blue-600 transition-colors group"
+                  >
+                    <Building2 size={14} className="group-hover:scale-110 transition-transform"/> 
+                    {position.client.name}
+                    <ExternalLink size={12} className="opacity-0 group-hover:opacity-100 transition-opacity"/>
+                  </a>
                 ) : (
-                    <div className="flex gap-2 animate-in fade-in slide-in-from-right-2">
-                        <button onClick={() => { setIsEditing(false); setEditForm(position); }} className="px-4 py-2 text-slate-500 hover:bg-slate-100 rounded-xl font-bold text-sm">Cancel</button>
-                        <button onClick={handleSave} disabled={loading} className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-200 flex items-center gap-2">
-                            <Save size={16}/> Save
-                        </button>
-                    </div>
+                  <span className="text-sm text-slate-600 font-medium flex items-center gap-1.5">
+                    <Building2 size={14}/> {position.client?.name || 'Unknown Client'}
+                  </span>
                 )}
-                <button onClick={closeSheet} className="p-2 bg-slate-100 hover:bg-red-50 hover:text-red-500 rounded-full text-slate-400 transition-colors">
-                    <ChevronDown size={24}/>
+
+                <div className="h-4 w-px bg-slate-200"></div>
+                
+                <span className="text-xs text-slate-500 flex items-center gap-1">
+                  <Clock size={12}/> Posted {getRelativeTime(position.created_at)}
+                </span>
+              </div>
+
+              {isEditing ? (
+                <input 
+                  type="text"
+                  value={editForm.title || ''}
+                  onChange={e => setEditForm({...editForm, title: e.target.value})}
+                  className="text-3xl font-bold text-slate-900 leading-tight border-2 border-blue-200 rounded-lg px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-500 bg-blue-50"
+                  autoFocus
+                />
+              ) : (
+                <h2 className="text-3xl font-bold text-slate-900 leading-tight">{position.title}</h2>
+              )}
+            </div>
+          ) : (
+            <div className="flex-1 animate-pulse space-y-3">
+              <div className="h-5 w-32 bg-slate-200 rounded"></div>
+              <div className="h-9 w-96 bg-slate-200 rounded"></div>
+            </div>
+          )}
+          
+          <div className="flex items-center gap-2 flex-shrink-0 ml-4">
+            {!isEditing ? (
+              <>
+                <button 
+                  onClick={handleCopyLink}
+                  className="p-2.5 hover:bg-slate-100 text-slate-600 hover:text-blue-600 rounded-lg transition-all group relative"
+                  title="Copy link"
+                >
+                  {copiedLink ? <Check size={18} className="text-green-600"/> : <LinkIcon size={18}/>}
+                  {copiedLink && (
+                    <span className="absolute -bottom-8 left-1/2 -translate-x-1/2 text-xs bg-green-600 text-white px-2 py-1 rounded whitespace-nowrap">
+                      Link copied!
+                    </span>
+                  )}
                 </button>
-             </div>
-          </div>
+                
+                <button 
+                  onClick={() => setIsEditing(true)} 
+                  className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg font-bold text-sm transition-all shadow-sm"
+                >
+                  <Edit3 size={16}/> Edit
+                </button>
 
-          {/* Navigation Tabs */}
-          <div className="flex px-8 border-b border-slate-100 bg-white flex-shrink-0">
-             {[
-               { id: 'overview', label: 'Overview', icon: Target },
-               { id: 'pipeline', label: `Pipeline (${pipeline.length})`, icon: Users },
-               { id: 'activity', label: 'Activity Log', icon: Activity },
-             ].map((tab) => (
-               <button
-                 key={tab.id}
-                 onClick={() => setActiveTab(tab.id as any)}
-                 className={`mr-8 py-4 text-sm font-bold border-b-2 transition-colors flex items-center gap-2 ${activeTab === tab.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
-               >
-                 <tab.icon size={16}/> {tab.label}
-               </button>
-             ))}
-          </div>
-
-          {/* Content Area */}
-          <div 
-            ref={contentRef}
-            className="flex-1 overflow-y-auto bg-slate-50 p-8 custom-scrollbar"
-            onScroll={handleContentScroll}
-          >
-             {position ? (
-               <div className="max-w-6xl mx-auto pb-10">
+                <div className="relative">
+                  <button 
+                    onClick={() => setShowActions(!showActions)}
+                    className="p-2.5 hover:bg-slate-100 text-slate-600 rounded-lg transition-colors"
+                  >
+                    <MoreHorizontal size={18}/>
+                  </button>
                   
-                  {/* === TAB: OVERVIEW === */}
-                  {activeTab === 'overview' && (
-                    <div className="grid grid-cols-12 gap-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                        {/* Left Column: Details */}
-                        <div className="col-span-8 space-y-6">
-                           
-                           {/* Quick Stats Grid */}
-                           <div className="grid grid-cols-3 gap-4">
-                              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                                 <p className="text-xs font-bold text-slate-400 uppercase mb-1">Salary Range</p>
-                                 <p className="text-lg font-bold text-slate-900">
-                                    ${Math.round(Number(position.salary_min)/1000)}k - {Math.round(Number(position.salary_max)/1000)}k
-                                 </p>
-                              </div>
-                              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                                 <p className="text-xs font-bold text-slate-400 uppercase mb-1">Projected Fee</p>
-                                 <p className="text-lg font-bold text-green-600">{calculateFee()}</p>
-                              </div>
-                              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                                 <p className="text-xs font-bold text-slate-400 uppercase mb-1">Location</p>
-                                 <div className="flex items-center gap-1.5 text-lg font-bold text-slate-900 truncate">
-                                    <MapPin size={16} className="text-blue-500 flex-shrink-0"/>
-                                    {position.location || 'Remote'}
-                                 </div>
-                              </div>
-                           </div>
+                  {showActions && (
+                    <div className="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-2xl border border-slate-200 py-2 z-50 animate-in fade-in slide-in-from-top-2">
+                      <button className="w-full px-4 py-2 text-left text-sm hover:bg-slate-50 flex items-center gap-2 text-slate-700">
+                        <Share2 size={14}/> Share Position
+                      </button>
+                      <button className="w-full px-4 py-2 text-left text-sm hover:bg-slate-50 flex items-center gap-2 text-slate-700">
+                        <Download size={14}/> Export PDF
+                      </button>
+                      <div className="h-px bg-slate-100 my-1"></div>
+                      <button className="w-full px-4 py-2 text-left text-sm hover:bg-slate-50 flex items-center gap-2 text-slate-700">
+                        <Archive size={14}/> Archive
+                      </button>
+                      <button className="w-full px-4 py-2 text-left text-sm hover:bg-red-50 flex items-center gap-2 text-red-600">
+                        <Trash2 size={14}/> Delete
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="flex gap-2 animate-in fade-in slide-in-from-right-2">
+                <button 
+                  onClick={() => { setIsEditing(false); setEditForm(position); }} 
+                  className="px-4 py-2.5 text-slate-600 hover:bg-slate-100 rounded-lg font-bold text-sm transition-colors"
+                  disabled={saving}
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={handleSave} 
+                  disabled={saving}
+                  className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white rounded-lg font-bold text-sm shadow-lg shadow-blue-200 flex items-center gap-2 transition-all"
+                >
+                  {saving ? (
+                    <>
+                      <Loader2 size={16} className="animate-spin"/> Saving...
+                    </>
+                  ) : (
+                    <>
+                      <Save size={16}/> Save Changes
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
+            
+            <button 
+              onClick={closeSheet} 
+              className="p-2.5 hover:bg-red-50 hover:text-red-600 rounded-lg text-slate-400 transition-all ml-2"
+            >
+              <X size={20}/>
+            </button>
+          </div>
+        </div>
 
-                           {/* Description */}
-                           <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm min-h-[300px]">
-                              <div className="flex justify-between items-center mb-4">
-                                 <h4 className="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
-                                    <Briefcase size={16} className="text-blue-500"/> Job Description
-                                 </h4>
-                                 {isEditing && <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-1 rounded font-bold">Editing</span>}
-                              </div>
-                              
-                              {isEditing ? (
-                                  <textarea 
-                                    className="w-full h-64 p-4 border border-slate-200 rounded-xl text-sm leading-relaxed text-slate-700 resize-none focus:ring-2 focus:ring-blue-100 outline-none bg-slate-50" 
-                                    value={editForm.description} 
-                                    onChange={e => setEditForm({...editForm, description: e.target.value})} 
-                                  />
-                              ) : (
-                                  <div className="text-sm text-slate-600 leading-relaxed whitespace-pre-wrap font-medium">
-                                      {position.description || "No description provided."}
-                                  </div>
-                              )}
-                           </div>
+        {/* Navigation Tabs */}
+        <div className="flex px-8 border-b border-slate-200 bg-white flex-shrink-0 overflow-x-auto">
+          {[
+            { id: 'overview', label: 'Overview', icon: Target },
+            { id: 'pipeline', label: 'Pipeline', icon: Users, badge: pipeline.length },
+            { id: 'activity', label: 'Activity', icon: Activity, badge: logs.length },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id as any)}
+              className={`mr-6 py-4 text-sm font-bold border-b-2 transition-all flex items-center gap-2 whitespace-nowrap ${
+                activeTab === tab.id 
+                  ? 'border-blue-600 text-blue-600' 
+                  : 'border-transparent text-slate-400 hover:text-slate-600 hover:border-slate-300'
+              }`}
+            >
+              <tab.icon size={16}/> 
+              {tab.label}
+              {tab.badge !== undefined && tab.badge > 0 && (
+                <span className={`min-w-[20px] h-5 px-1.5 rounded-full text-xs font-bold flex items-center justify-center ${
+                  activeTab === tab.id ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'
+                }`}>
+                  {tab.badge}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        {/* Content Area */}
+        <div 
+          ref={contentRef}
+          className="flex-1 overflow-y-auto bg-slate-50 custom-scrollbar"
+          onScroll={handleContentScroll}
+        >
+          {loading ? (
+            <div className="flex h-full items-center justify-center">
+              <div className="text-center">
+                <Loader2 className="animate-spin text-blue-600 mx-auto mb-4" size={40}/>
+                <p className="text-slate-500 font-medium">Loading position details...</p>
+              </div>
+            </div>
+          ) : position ? (
+            <div className="max-w-7xl mx-auto p-8 pb-20">
+              
+              {/* === TAB: OVERVIEW === */}
+              {activeTab === 'overview' && (
+                <div className="grid grid-cols-12 gap-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                  
+                  {/* Left Column: Details */}
+                  <div className="col-span-8 space-y-6">
+                    
+                    {/* Quick Stats Grid */}
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Salary Range</p>
+                          <DollarSign size={16} className="text-green-500"/>
                         </div>
+                        <p className="text-2xl font-bold text-slate-900">
+                          ${Math.round(Number(position.salary_min) / 1000)}k - ${Math.round(Number(position.salary_max) / 1000)}k
+                        </p>
+                        <p className="text-xs text-slate-500 mt-1">
+                          Avg: ${Math.round(((Number(position.salary_min) + Number(position.salary_max)) / 2) / 1000)}k
+                        </p>
+                      </div>
 
-                        {/* Right Column: Meta & Company */}
-                        <div className="col-span-4 space-y-6">
-                           {/* Status Card */}
-                           <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-4">Status</h4>
-                              {isEditing ? (
-                                  <select className="w-full p-2.5 border rounded-lg text-sm bg-slate-50 font-bold" value={editForm.status} onChange={e => setEditForm({...editForm, status: e.target.value})}>
-                                     <option>Open</option><option>Filled</option><option>On Hold</option><option>Cancelled</option>
-                                  </select>
-                              ) : (
-                                  <div className="flex items-center justify-between">
-                                     <div className="flex items-center gap-2">
-                                        <div className={`w-3 h-3 rounded-full ${position.status === 'Open' ? 'bg-green-500 animate-pulse' : 'bg-slate-400'}`}></div>
-                                        <span className="font-bold text-slate-900 text-lg">{position.status}</span>
-                                     </div>
-                                     <span className="text-xs text-slate-400">{new Date(position.created_at).toLocaleDateString()}</span>
-                                  </div>
-                              )}
-                           </div>
+                      <div className="bg-gradient-to-br from-green-50 to-emerald-50 p-5 rounded-xl border border-green-200 shadow-sm hover:shadow-md transition-shadow">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-xs font-bold text-green-700 uppercase tracking-wide">Projected Fee</p>
+                          <TrendingUp size={16} className="text-green-600"/>
+                        </div>
+                        <p className="text-2xl font-bold text-green-700">{calculateFee()}</p>
+                        <p className="text-xs text-green-600 mt-1">
+                          {position.product_type === 'fixed' ? 'Fixed fee' : `${position.fee_percentage}% of salary`}
+                        </p>
+                      </div>
 
-                           {/* Company Intel */}
-                           <div className="bg-slate-900 text-white p-6 rounded-2xl shadow-lg relative overflow-hidden">
-                              <div className="absolute top-0 right-0 p-4 opacity-10">
-                                 <Globe size={64}/>
-                              </div>
-                              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                                 Company Intel
-                              </h4>
-                              <div className="space-y-4 relative z-10">
-                                 <p className="text-sm text-slate-300 leading-relaxed line-clamp-4">
-                                    {position.client?.description || "No company intel available."}
-                                 </p>
-                                 <div className="flex flex-wrap gap-2 pt-2">
-                                    {position.client?.industry && <span className="text-[10px] font-bold bg-white/10 text-white px-2 py-1 rounded border border-white/10">{position.client.industry}</span>}
-                                    {position.client?.location && <span className="text-[10px] font-bold bg-white/10 text-white px-2 py-1 rounded border border-white/10">{position.client.location}</span>}
-                                 </div>
-                              </div>
-                           </div>
+                      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Salary Range</p>
+                          <DollarSign size={16} className="text-green-500"/>
+                        </div>
+                        <p className="text-2xl font-bold text-slate-900">
+                          ${Math.round(Number(position.salary_min) / 1000)}k - ${Math.round(Number(position.salary_max) / 1000)}k
+                        </p>
+                        <p className="text-xs text-slate-500 mt-1">
+                          Avg: ${Math.round(((Number(position.salary_min) + Number(position.salary_max)) / 2) / 1000)}k
+                        </p>
+                      </div>
 
-                           {/* Recruitment Owner */}
-                           <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-3">
-                              <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-bold">
-                                 {position.owner?.email?.[0].toUpperCase() || 'U'}
+                      <div className="bg-gradient-to-br from-green-50 to-emerald-50 p-5 rounded-xl border border-green-200 shadow-sm hover:shadow-md transition-shadow">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-xs font-bold text-green-700 uppercase tracking-wide">Projected Fee</p>
+                          <TrendingUp size={16} className="text-green-600"/>
+                        </div>
+                        <p className="text-2xl font-bold text-green-700">{calculateFee()}</p>
+                        <p className="text-xs text-green-600 mt-1">
+                          {position.product_type === 'fixed' ? 'Fixed fee' : `${position.fee_percentage}% of salary`}
+                        </p>
+                      </div>
+
+                      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Location</p>
+                          <MapPin size={16} className="text-blue-500"/>
+                        </div>
+                        {isEditing ? (
+                          <input
+                            type="text"
+                            value={editForm.location || ''}
+                            onChange={e => setEditForm({...editForm, location: e.target.value})}
+                            className="w-full text-lg font-bold text-slate-900 border border-slate-200 rounded px-2 py-1"
+                          />
+                        ) : (
+                          <p className="text-lg font-bold text-slate-900 truncate">
+                            {position.location || 'Remote'}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Job Description */}
+                    <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                      <div className="flex justify-between items-center mb-4">
+                        <h4 className="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                          <FileText size={16} className="text-blue-500"/> Job Description
+                        </h4>
+                        {isEditing && (
+                          <span className="text-xs bg-blue-100 text-blue-700 px-3 py-1 rounded-full font-bold flex items-center gap-1">
+                            <Edit3 size={12}/> Editing
+                          </span>
+                        )}
+                      </div>
+                      
+                      {isEditing ? (
+                        <textarea 
+                          className="w-full h-80 p-4 border-2 border-blue-200 rounded-xl text-sm leading-relaxed text-slate-700 resize-none focus:ring-2 focus:ring-blue-500 outline-none bg-blue-50/30 font-mono" 
+                          value={editForm.description || ''} 
+                          onChange={e => setEditForm({...editForm, description: e.target.value})} 
+                          placeholder="Enter job description, requirements, and responsibilities..."
+                        />
+                      ) : (
+                        <div className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">
+                          {position.description || (
+                            <div className="text-slate-400 italic py-8 text-center">
+                              No description provided. Click Edit to add one.
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Additional Info */}
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+                        <p className="text-xs font-bold text-slate-500 uppercase mb-3">Requirements</p>
+                        <ul className="space-y-2">
+                          <li className="flex items-start gap-2 text-sm text-slate-700">
+                            <CheckCircle2 size={16} className="text-green-500 flex-shrink-0 mt-0.5"/>
+                            <span>Experience level requirements</span>
+                          </li>
+                          <li className="flex items-start gap-2 text-sm text-slate-700">
+                            <CheckCircle2 size={16} className="text-green-500 flex-shrink-0 mt-0.5"/>
+                            <span>Required certifications</span>
+                          </li>
+                          <li className="flex items-start gap-2 text-sm text-slate-400 italic">
+                            <AlertCircle size={16} className="flex-shrink-0 mt-0.5"/>
+                            <span>Add specific requirements</span>
+                          </li>
+                        </ul>
+                      </div>
+
+                      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+                        <p className="text-xs font-bold text-slate-500 uppercase mb-3">Benefits</p>
+                        <ul className="space-y-2">
+                          <li className="flex items-start gap-2 text-sm text-slate-700">
+                            <Award size={16} className="text-blue-500 flex-shrink-0 mt-0.5"/>
+                            <span>Health insurance</span>
+                          </li>
+                          <li className="flex items-start gap-2 text-sm text-slate-700">
+                            <Award size={16} className="text-blue-500 flex-shrink-0 mt-0.5"/>
+                            <span>401(k) matching</span>
+                          </li>
+                          <li className="flex items-start gap-2 text-sm text-slate-400 italic">
+                            <AlertCircle size={16} className="flex-shrink-0 mt-0.5"/>
+                            <span>Add company benefits</span>
+                          </li>
+                        </ul>
+                      </div>
+                    </div>
+
+                  </div>
+
+                  {/* Right Column: Meta & Context */}
+                  <div className="col-span-4 space-y-5">
+                    
+                    {/* Status Card */}
+                    <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                      <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-4 flex items-center gap-2">
+                        <Activity size={14}/> Status
+                      </h4>
+                      {isEditing ? (
+                        <select 
+                          className="w-full p-3 border-2 border-blue-200 rounded-lg text-sm bg-blue-50 font-bold focus:ring-2 focus:ring-blue-500 outline-none" 
+                          value={editForm.status || ''} 
+                          onChange={e => setEditForm({...editForm, status: e.target.value})}
+                        >
+                          <option>Open</option>
+                          <option>Filled</option>
+                          <option>On Hold</option>
+                          <option>Cancelled</option>
+                        </select>
+                      ) : (
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              <div className={`w-3 h-3 rounded-full ${getStatusColor(position.status)} ${position.status === 'Open' ? 'animate-pulse' : ''}`}></div>
+                              <span className="font-bold text-slate-900 text-lg">{position.status}</span>
+                            </div>
+                          </div>
+                          <div className="pt-3 border-t border-slate-100">
+                            <p className="text-xs text-slate-500 mb-1">Created</p>
+                            <p className="text-sm font-medium text-slate-700">{new Date(position.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Priority */}
+                    <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                      <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-4 flex items-center gap-2">
+                        <Zap size={14}/> Priority Level
+                      </h4>
+                      {isEditing ? (
+                        <select 
+                          className="w-full p-3 border-2 border-blue-200 rounded-lg text-sm bg-blue-50 font-bold focus:ring-2 focus:ring-blue-500 outline-none" 
+                          value={editForm.priority || ''} 
+                          onChange={e => setEditForm({...editForm, priority: e.target.value})}
+                        >
+                          <option>Urgent</option>
+                          <option>High</option>
+                          <option>Medium</option>
+                          <option>Low</option>
+                        </select>
+                      ) : (
+                        <div className={`px-4 py-3 rounded-lg border-2 font-bold text-center ${getPriorityColor(position.priority).bg} ${getPriorityColor(position.priority).text} ${getPriorityColor(position.priority).border}`}>
+                          {position.priority}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Company Intel */}
+                    <div className="bg-gradient-to-br from-slate-900 to-slate-800 text-white p-6 rounded-2xl shadow-xl relative overflow-hidden">
+                      <div className="absolute top-0 right-0 p-4 opacity-5">
+                        <Building2 size={80}/>
+                      </div>
+                      <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2 relative z-10">
+                        <Globe size={14}/> Company Intel
+                      </h4>
+                      <div className="space-y-4 relative z-10">
+                        <p className="text-sm text-slate-300 leading-relaxed">
+                          {position.client?.description || "No company information available."}
+                        </p>
+                        {position.client?.website && (
+                          <a 
+                            href={`https://${position.client.website}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-2 text-xs font-bold text-blue-400 hover:text-blue-300 transition-colors"
+                          >
+                            <Globe size={12}/> {position.client.website}
+                            <ExternalLink size={10}/>
+                          </a>
+                        )}
+                        {position.client?.location && (
+                          <div className="flex items-center gap-2 text-xs text-slate-400">
+                            <MapPin size={12}/>
+                            {position.client.location}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Recruitment Owner */}
+                    <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                      <p className="text-xs font-bold text-slate-500 uppercase mb-4 flex items-center gap-2">
+                        <Users size={14}/> Lead Recruiter
+                      </p>
+                      <div className="flex items-center gap-3">
+                        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center text-white font-bold text-lg shadow-md">
+                          {position.owner?.full_name?.[0]?.toUpperCase() || position.owner?.email?.[0]?.toUpperCase() || 'U'}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-bold text-slate-900 truncate">
+                            {position.owner?.full_name || position.owner?.email || 'Unassigned'}
+                          </p>
+                          {position.owner?.email && !position.owner?.full_name && (
+                            <p className="text-xs text-slate-500 truncate">{position.owner.email}</p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                  </div>
+                </div>
+              )}
+
+              {/* === TAB: PIPELINE === */}
+              {activeTab === 'pipeline' && (
+                <div className="animate-in fade-in slide-in-from-bottom-2 duration-300 space-y-6">
+                  
+                  {/* Pipeline Stats */}
+                  <div className="grid grid-cols-5 gap-4">
+                    {[
+                      { label: 'Total', count: pipelineStats.total, color: 'bg-slate-100 text-slate-900' },
+                      { label: 'Submitted', count: pipelineStats.submitted, color: 'bg-blue-50 text-blue-700' },
+                      { label: 'Screening', count: pipelineStats.screening, color: 'bg-purple-50 text-purple-700' },
+                      { label: 'Interview', count: pipelineStats.interview, color: 'bg-indigo-50 text-indigo-700' },
+                      { label: 'Offer', count: pipelineStats.offer, color: 'bg-green-50 text-green-700' },
+                    ].map(stat => (
+                      <div key={stat.label} className={`${stat.color} p-4 rounded-xl border border-opacity-20 shadow-sm`}>
+                        <p className="text-xs font-bold opacity-70 uppercase mb-1">{stat.label}</p>
+                        <p className="text-3xl font-bold">{stat.count}</p>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Header Actions */}
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-3">
+                      <h3 className="text-lg font-bold text-slate-900">Active Candidates</h3>
+                      <div className="flex gap-1 bg-slate-100 p-1 rounded-lg">
+                        {['all', 'submitted', 'screening', 'interview', 'offer'].map(filter => (
+                          <button
+                            key={filter}
+                            onClick={() => setPipelineFilter(filter)}
+                            className={`px-3 py-1 rounded-md text-xs font-bold capitalize transition-all ${
+                              pipelineFilter === filter 
+                                ? 'bg-white shadow-sm text-slate-900' 
+                                : 'text-slate-500 hover:text-slate-700'
+                            }`}
+                          >
+                            {filter}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <button className="bg-slate-900 text-white px-4 py-2.5 rounded-lg text-sm font-bold hover:bg-slate-800 flex items-center gap-2 shadow-sm transition-all">
+                      <Plus size={16}/> Add Candidate
+                    </button>
+                  </div>
+
+                  {/* Candidates Grid */}
+                  {filteredPipeline.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-20 bg-white rounded-2xl border-2 border-dashed border-slate-300">
+                      <div className="p-5 bg-slate-50 rounded-full mb-4">
+                        <Users size={40} className="text-slate-300"/>
+                      </div>
+                      <p className="text-slate-600 font-bold text-lg">No candidates yet</p>
+                      <p className="text-sm text-slate-500 mt-1 mb-4">Start submitting candidates to build your pipeline</p>
+                      <button className="bg-blue-600 text-white px-5 py-2.5 rounded-lg text-sm font-bold hover:bg-blue-700 flex items-center gap-2 shadow-lg shadow-blue-200">
+                        <Plus size={16}/> Submit First Candidate
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {filteredPipeline.map(sub => (
+                        <div key={sub.id} className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:shadow-lg transition-all group cursor-pointer relative overflow-hidden">
+                          {/* Stage indicator */}
+                          <div className={`absolute top-0 left-0 w-1.5 h-full ${
+                            sub.stage === 'Offer' ? 'bg-green-500' : 
+                            sub.stage === 'Interview' ? 'bg-indigo-500' :
+                            sub.stage === 'Screening' ? 'bg-purple-500' : 'bg-blue-500'
+                          }`}></div>
+                          
+                          {/* Header */}
+                          <div className="flex justify-between items-start mb-4 pl-2">
+                            <div className="flex items-center gap-3 flex-1 min-w-0">
+                              <div className="w-11 h-11 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center text-white font-bold text-lg shadow-md flex-shrink-0">
+                                {sub.candidate?.name?.charAt(0)?.toUpperCase() || '?'}
                               </div>
                               <div className="min-w-0">
-                                 <p className="text-xs text-slate-400 uppercase font-bold">Lead Recruiter</p>
-                                 <p className="text-sm font-bold text-slate-900 truncate">{position.owner?.email || 'Unassigned'}</p>
+                                <h4 className="font-bold text-slate-900 leading-tight truncate">{sub.candidate?.name || 'Unknown'}</h4>
+                                <p className="text-xs text-slate-500 truncate">{sub.candidate?.current_role || 'No role specified'}</p>
                               </div>
-                           </div>
+                            </div>
+                            <button className="text-slate-300 hover:text-slate-600 group-hover:opacity-100 opacity-0 transition-all">
+                              <MoreHorizontal size={16}/>
+                            </button>
+                          </div>
+
+                          {/* Info Grid */}
+                          <div className="pl-2 space-y-3">
+                            <div className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border ${getStageColor(sub.stage)}`}>
+                              <div className="w-1.5 h-1.5 rounded-full bg-current"></div>
+                              {sub.stage}
+                            </div>
+                            
+                            {sub.candidate?.location && (
+                              <div className="flex items-center gap-2 text-xs text-slate-600">
+                                <MapPin size={12} className="text-slate-400"/>
+                                {sub.candidate.location}
+                              </div>
+                            )}
+                            
+                            {sub.candidate?.experience_years && (
+                              <div className="flex items-center gap-2 text-xs text-slate-600">
+                                <Briefcase size={12} className="text-slate-400"/>
+                                {sub.candidate.experience_years}+ years experience
+                              </div>
+                            )}
+
+                            {/* Contact Info */}
+                            <div className="flex items-center gap-2 pt-3 border-t border-slate-100">
+                              {sub.candidate?.email && (
+                                <a 
+                                  href={`mailto:${sub.candidate.email}`}
+                                  className="p-1.5 bg-slate-50 hover:bg-blue-50 text-slate-600 hover:text-blue-600 rounded transition-colors"
+                                  onClick={e => e.stopPropagation()}
+                                >
+                                  <Mail size={14}/>
+                                </a>
+                              )}
+                              {sub.candidate?.phone && (
+                                <a 
+                                  href={`tel:${sub.candidate.phone}`}
+                                  className="p-1.5 bg-slate-50 hover:bg-green-50 text-slate-600 hover:text-green-600 rounded transition-colors"
+                                  onClick={e => e.stopPropagation()}
+                                >
+                                  <Phone size={14}/>
+                                </a>
+                              )}
+                              {sub.candidate?.linkedin_url && (
+                                <a 
+                                  href={sub.candidate.linkedin_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="p-1.5 bg-slate-50 hover:bg-blue-50 text-slate-600 hover:text-blue-600 rounded transition-colors"
+                                  onClick={e => e.stopPropagation()}
+                                >
+                                  <Linkedin size={14}/>
+                                </a>
+                              )}
+                              
+                              <div className="flex-1"></div>
+                              
+                              <span className="text-xs text-slate-400 flex items-center gap-1">
+                                <Clock size={11}/>
+                                {getRelativeTime(sub.created_at)}
+                              </span>
+                            </div>
+                          </div>
                         </div>
+                      ))}
                     </div>
                   )}
-
-                  {/* === TAB: PIPELINE === */}
-                  {activeTab === 'pipeline' && (
-                    <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-                       <div className="flex justify-between items-center mb-6">
-                          <h3 className="text-lg font-bold text-slate-900">Active Candidates ({pipeline.length})</h3>
-                          <button className="bg-slate-900 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-slate-800 flex items-center gap-2">
-                             <Users size={14}/> Add Candidate
-                          </button>
-                       </div>
-
-                       {pipeline.length === 0 ? (
-                          <div className="flex flex-col items-center justify-center py-20 bg-white rounded-2xl border border-dashed border-slate-300">
-                             <div className="p-4 bg-slate-50 rounded-full mb-4 text-slate-300"><Users size={32}/></div>
-                             <p className="text-slate-500 font-medium">Pipeline is empty</p>
-                             <p className="text-xs text-slate-400 mt-1">Start submitting candidates to see them here.</p>
-                          </div>
-                       ) : (
-                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                             {pipeline.map(sub => (
-                                <div key={sub.id} className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-all group cursor-pointer relative overflow-hidden">
-                                   <div className={`absolute top-0 left-0 w-1 h-full ${sub.status === 'Offer' ? 'bg-green-500' : 'bg-blue-500'}`}></div>
-                                   
-                                   <div className="flex justify-between items-start mb-3 pl-2">
-                                      <div className="flex items-center gap-3">
-                                         <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold ${sub.candidate?.avatar_color || 'bg-slate-100 text-slate-600'}`}>
-                                            {sub.candidate?.name?.charAt(0)}
-                                         </div>
-                                         <div>
-                                            <h4 className="font-bold text-slate-900 leading-tight">{sub.candidate?.name}</h4>
-                                            <p className="text-xs text-slate-500">{sub.candidate?.role}</p>
-                                         </div>
-                                      </div>
-                                      <button className="text-slate-300 hover:text-slate-600"><MoreHorizontal size={16}/></button>
-                                   </div>
-
-                                   <div className="pl-2 space-y-3">
-                                      <div className="flex items-center justify-between text-xs">
-                                         <span className="text-slate-400 font-medium">Stage</span>
-                                         <span className="font-bold text-slate-700 bg-slate-50 px-2 py-1 rounded border border-slate-100">{sub.stage}</span>
-                                      </div>
-                                      
-                                      <div className="flex items-center justify-between text-xs pt-3 border-t border-slate-50">
-                                         <span className="text-slate-400 flex items-center gap-1"><Clock size={12}/> {new Date(sub.created_at).toLocaleDateString()}</span>
-                                         {sub.is_shortlisted && <span className="flex items-center gap-1 text-yellow-600 font-bold"><CheckCircle2 size={12}/> Shortlist</span>}
-                                      </div>
-                                   </div>
-                                </div>
-                             ))}
-                          </div>
-                       )}
-                    </div>
-                  )}
-
-                  {/* === TAB: ACTIVITY === */}
-                  {activeTab === 'activity' && (
-                    <div className="max-w-2xl mx-auto animate-in fade-in slide-in-from-bottom-2 duration-300">
-                       <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm mb-8">
-                          <textarea 
-                             className="w-full p-3 text-sm border-none resize-none focus:ring-0 placeholder:text-slate-400"
-                             placeholder="Add an internal note or update..."
-                             rows={2}
-                             value={newLog}
-                             onChange={e => setNewLog(e.target.value)}
-                          />
-                          <div className="flex justify-between items-center pt-2 border-t border-slate-100 mt-2">
-                             <button className="text-slate-400 hover:text-slate-600 p-2"><Lock size={16}/></button>
-                             <button onClick={handleAddLog} className="bg-blue-600 text-white px-4 py-1.5 rounded-lg text-xs font-bold hover:bg-blue-700 flex items-center gap-2">
-                                <Send size={12}/> Post
-                             </button>
-                          </div>
-                       </div>
-
-                       <div className="space-y-6 relative before:absolute before:left-4 before:top-0 before:bottom-0 before:w-px before:bg-slate-200">
-                          {logs.length === 0 && <p className="text-center text-slate-400 text-sm pl-8">No recent activity logged.</p>}
-                          {logs.map((log, idx) => (
-                             <div key={log.id || idx} className="relative pl-10">
-                                <div className="absolute left-[11px] top-1 w-2.5 h-2.5 rounded-full bg-blue-500 border-2 border-white shadow-sm ring-1 ring-blue-100"></div>
-                                <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                                   <div className="flex justify-between items-start mb-1">
-                                      <span className="text-xs font-bold text-slate-900">{log.user || "System"}</span>
-                                      <span className="text-[10px] text-slate-400">{new Date(log.created_at).toLocaleDateString()}</span>
-                                   </div>
-                                   <p className="text-sm text-slate-600">{log.description}</p>
-                                </div>
-                             </div>
-                          ))}
-                       </div>
-                    </div>
-                  )}
-
-               </div>
-             ) : (
-                <div className="flex h-full items-center justify-center flex-col gap-3">
-                   {loading ? (
-                       <>
-                           <Loader2 className="animate-spin text-slate-400" size={32}/>
-                           <p className="text-slate-400 text-sm font-medium">Loading position details...</p>
-                       </>
-                   ) : (
-                        <div className="flex h-full items-center justify-center">
-                            <Loader2 className="animate-spin text-blue-600" size={40}/>
-                        </div>
-                   )}
                 </div>
-             )}
-          </div>
-       </div>
+              )}
+
+              {/* === TAB: ACTIVITY === */}
+              {activeTab === 'activity' && (
+                <div className="max-w-3xl mx-auto animate-in fade-in slide-in-from-bottom-2 duration-300">
+                  
+                  {/* Add Note */}
+                  <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm mb-8">
+                    <div className="flex items-start gap-3 mb-3">
+                      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center text-white font-bold flex-shrink-0">
+                        {position.owner?.full_name?.[0]?.toUpperCase() || 'Y'}
+                      </div>
+                      <textarea 
+                        className="flex-1 p-3 text-sm border border-slate-200 rounded-lg resize-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                        placeholder="Add an internal note, update, or comment..."
+                        rows={3}
+                        value={newLog}
+                        onChange={e => setNewLog(e.target.value)}
+                      />
+                    </div>
+                    <div className="flex justify-between items-center pl-14">
+                      <div className="flex gap-2">
+                        <button className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-lg transition-colors" title="Private note">
+                          <Lock size={16}/>
+                        </button>
+                        <button className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-lg transition-colors" title="Add tag">
+                          <Tag size={16}/>
+                        </button>
+                      </div>
+                      <button 
+                        onClick={handleAddLog}
+                        disabled={!newLog.trim()}
+                        className="bg-blue-600 disabled:bg-slate-300 text-white px-5 py-2 rounded-lg text-sm font-bold hover:bg-blue-700 disabled:hover:bg-slate-300 flex items-center gap-2 transition-all shadow-sm disabled:cursor-not-allowed"
+                      >
+                        <Send size={14}/> Post Note
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Activity Timeline */}
+                  <div className="space-y-6 relative before:absolute before:left-[22px] before:top-0 before:bottom-0 before:w-0.5 before:bg-slate-200">
+                    {logs.length === 0 && (
+                      <div className="text-center py-12 bg-white rounded-xl border border-dashed border-slate-300">
+                        <Activity size={32} className="text-slate-300 mx-auto mb-3"/>
+                        <p className="text-slate-500 font-medium">No activity logged yet</p>
+                        <p className="text-xs text-slate-400 mt-1">Updates and notes will appear here</p>
+                      </div>
+                    )}
+                    
+                    {logs.map((log, idx) => {
+                      const getLogIcon = (action: string) => {
+                        switch(action) {
+                          case 'status_change': return <Activity size={14}/>;
+                          case 'created': return <Plus size={14}/>;
+                          case 'note': return <MessageSquare size={14}/>;
+                          case 'updated': return <Edit3 size={14}/>;
+                          default: return <Clock size={14}/>;
+                        }
+                      };
+
+                      const getLogColor = (action: string) => {
+                        switch(action) {
+                          case 'status_change': return 'bg-blue-500 ring-blue-100';
+                          case 'created': return 'bg-green-500 ring-green-100';
+                          case 'note': return 'bg-purple-500 ring-purple-100';
+                          case 'updated': return 'bg-orange-500 ring-orange-100';
+                          default: return 'bg-slate-400 ring-slate-100';
+                        }
+                      };
+
+                      return (
+                        <div key={log.id || idx} className="relative pl-14 group">
+                          <div className={`absolute left-[15px] top-2 w-3.5 h-3.5 rounded-full ${getLogColor(log.action)} border-2 border-white shadow-sm ring-2 flex items-center justify-center text-white`}>
+                            {/* Icon would go here if needed */}
+                          </div>
+                          <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-all">
+                            <div className="flex justify-between items-start mb-2">
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-slate-900 text-sm">{log.user || "System"}</span>
+                                <span className="text-xs text-slate-400">•</span>
+                                <span className="text-xs text-slate-500 font-medium capitalize">{log.action?.replace('_', ' ')}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-slate-400">{getRelativeTime(log.created_at)}</span>
+                                <button className="opacity-0 group-hover:opacity-100 p-1 hover:bg-slate-100 rounded transition-all">
+                                  <MoreHorizontal size={14} className="text-slate-400"/>
+                                </button>
+                              </div>
+                            </div>
+                            <p className="text-sm text-slate-700 leading-relaxed">{log.description}</p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+            </div>
+          ) : (
+            <div className="flex h-full items-center justify-center">
+              <div className="text-center">
+                <AlertCircle className="text-red-500 mx-auto mb-4" size={40}/>
+                <p className="text-slate-600 font-bold">Failed to load position</p>
+                <p className="text-sm text-slate-500 mt-1">This position may have been deleted</p>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

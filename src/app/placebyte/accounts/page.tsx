@@ -2,38 +2,26 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { 
-  Building2, TrendingUp, Users, AlertCircle, CheckCircle, 
-  MoreHorizontal, ArrowRight, ExternalLink, Mail, Phone, 
-  Calendar, Shield, Search, Filter, Plus, LayoutDashboard,
-  Clock, X, Activity, DollarSign, FileText, Lock, Unlock,
-  MessageSquare, Save, Briefcase, CreditCard, Receipt, Hash,
-  Info, UserPlus, Trash2, Calculator, Percent, Wallet, Send, Paperclip,
-  Printer 
+  Building2, AlertCircle, CheckCircle, Search, LayoutDashboard,
+  Clock, X, Activity, DollarSign, ExternalLink, FileText, Printer, MessageSquare, Users
 } from "lucide-react";
-import Link from "next/link";
 import ContractViewer from "@/components/ContractViewer";
-import { generateAccountReport } from "@/lib/reportGenerator"; 
+import { generateAccountReport } from "@/lib/reportGenerator";
+import CreatePositionModal from "./components/CreatePositionModal";
+import OverviewTab from "./components/OverviewTab";
+import FinanceTab from "./components/FinanceTab";
+import PositionsTab from "./components/PositionsTab";
+import TeamTab from "./components/TeamTab";
+import NotesTab from "./components/NotesTab";
 
 export const dynamic = "force-dynamic";
 
 // --- TYPES ---
-type Tab = 'overview' | 'commercials' | 'team' | 'notes';
-
-type Product = {
-  id: number;
-  name: string;
-  type: 'fixed' | 'commission' | 'hybrid';
-  base_price: number; 
-  commission_percent: number;
-  deposit_amount: number;
-  deposit_date: string;
-  deposit_paid: boolean;
-};
+type Tab = 'overview' | 'finance' | 'positions' | 'team' | 'notes';
 
 // REQUIRED FIELDS FOR HEALTHY SETUP
 const REQUIRED_COMMERCIALS = ['billing_contact_email', 'tax_id', 'payment_terms'];
 const REQUIRED_OPS = ['project_deadline', 'owner_id'];
-const REQUIRED_FIELDS = [...REQUIRED_COMMERCIALS, ...REQUIRED_OPS];
 
 export default function AccountsDashboard() {
   const [loading, setLoading] = useState(true);
@@ -50,9 +38,10 @@ export default function AccountsDashboard() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   
   const [isContractOpen, setIsContractOpen] = useState(false);
+  const [showCreatePosition, setShowCreatePosition] = useState(false);
 
   const [editForm, setEditForm] = useState<any>({});
-  const [products, setProducts] = useState<Product[]>([]);
+  const [positions, setPositions] = useState<any[]>([]);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [missingFields, setMissingFields] = useState<string[]>([]);
 
@@ -76,13 +65,13 @@ export default function AccountsDashboard() {
       const missing = allRequired.filter(f => !editForm[f]);
       setMissingFields(missing);
 
-      const totalVal = products.reduce((acc, p) => {
-        const price = Number(p.base_price) || 0;
-        if (p.type === 'commission') {
-           const comm = Number(p.commission_percent) || 0;
+      const totalVal = positions.reduce((acc, p) => {
+        const price = Number(p.salary_max) || 0;
+        if (p.product_type === 'commission') {
+           const comm = Number(p.fee_percentage) || 0;
            return acc + (price * (comm / 100)); 
         }
-        return acc + price;
+        return acc + (Number(p.fee_fixed) || 0);
       }, 0);
       
       const updatedForm = { ...editForm, contract_value: totalVal };
@@ -93,15 +82,15 @@ export default function AccountsDashboard() {
       const updatedAccount = { 
         ...selectedAccount, 
         ...updatedForm, 
-        commercial_products: products,
+        positions: positions,
         candidates: selectedAccount.candidates || [] 
       };
       setHealthDetails(calculateHealthScore(updatedAccount));
 
-      const currentState = JSON.stringify({ form: editForm, products: products });
+      const currentState = JSON.stringify({ form: editForm, positions: positions });
       setHasUnsavedChanges(currentState !== initialState);
     }
-  }, [products, editForm, selectedAccount, initialState]);
+  }, [positions, editForm, selectedAccount, initialState]);
 
   useEffect(() => {
     document.body.style.overflow = isSidebarOpen ? 'hidden' : 'unset';
@@ -156,19 +145,28 @@ export default function AccountsDashboard() {
     setNotes(data || []);
   };
 
+  const fetchPositions = async (clientId: string) => {
+    const { data } = await supabase
+      .from('positions')
+      .select('*')
+      .eq('client_id', clientId)
+      .order('created_at', { ascending: false });
+    setPositions(data || []);
+  };
+
   const calculateHealthScore = (client: any) => {
     let score = 100;
     const reasons: string[] = [];
     const HOURLY_COST_BASIS = client.hourly_rate_estimate || 10; 
     
     let totalValue = client.contract_value || 0;
-    if (Array.isArray(client.commercial_products) && client.commercial_products.length > 0) {
-       totalValue = client.commercial_products.reduce((sum: number, p: any) => {
-          const price = Number(p.base_price) || 0;
-          if (p.type === 'commission') {
-             return sum + (price * ((Number(p.commission_percent)||0)/100));
+    if (Array.isArray(client.positions) && client.positions.length > 0) {
+       totalValue = client.positions.reduce((sum: number, p: any) => {
+          const price = Number(p.salary_max) || 0;
+          if (p.product_type === 'commission') {
+             return sum + (price * ((Number(p.fee_percentage)||0)/100));
           }
-          return sum + price;
+          return sum + (Number(p.fee_fixed) || 0);
        }, 0);
     }
 
@@ -239,8 +237,8 @@ export default function AccountsDashboard() {
         reasons.push("Slow Payment Terms (-5)");
     }
 
-    if (client.commercial_products && client.commercial_products.length > 0 && client.candidates) {
-        const totalPositions = client.commercial_products.length;
+    if (client.positions && client.positions.length > 0 && client.candidates) {
+        const totalPositions = client.positions.length;
         const hiredCount = client.candidates.filter((c: any) => c.stage === 'Hired').length;
         const activeCount = client.candidates.filter((c: any) => ['Screening', 'Interview', 'Offer'].includes(c.stage)).length;
         
@@ -297,7 +295,7 @@ export default function AccountsDashboard() {
     setFilteredAccounts(result);
   };
 
-  const handleSelectAccount = (account: any) => {
+  const handleSelectAccount = async (account: any) => {
     setSelectedAccount(account);
     const health = calculateHealthScore(account);
     setHealthDetails(health);
@@ -323,11 +321,11 @@ export default function AccountsDashboard() {
       contract_url: account.contract_url || '' 
     };
 
-    const startProducts = Array.isArray(account.commercial_products) ? account.commercial_products : [];
-
     setEditForm(startForm);
-    setProducts(startProducts);
-    setInitialState(JSON.stringify({ form: startForm, products: startProducts }));
+    
+    await fetchPositions(account.id);
+    
+    setInitialState(JSON.stringify({ form: startForm, positions: [] }));
     setHasUnsavedChanges(false);
     
     fetchNotes(account.id);
@@ -340,24 +338,15 @@ export default function AccountsDashboard() {
     setIsSidebarOpen(false);
     setIsContractOpen(false);
     setSelectedAccount(null);
+    setShowCreatePosition(false);
   }
 
   const handleSaveChanges = async () => {
     if (!selectedAccount) return;
-    
-    const finalValue = products.reduce((acc, p) => {
-      const price = Number(p.base_price) || 0;
-      if (p.type === 'commission') {
-         const comm = Number(p.commission_percent) || 0;
-         return acc + (price * (comm / 100));
-      }
-      return acc + price;
-    }, 0);
 
     const { 
       healthReason, healthScore, missingCount,
       client_portal_settings, owner,
-      commercial_products,
       id, created_at,
       candidates, 
       ...cleanForm 
@@ -373,8 +362,6 @@ export default function AccountsDashboard() {
 
     const { error } = await supabase.from('clients').update({
       ...payload,
-      contract_value: finalValue,
-      commercial_products: products,
       last_interaction_at: new Date().toISOString(),
     }).eq('id', selectedAccount.id);
 
@@ -382,7 +369,7 @@ export default function AccountsDashboard() {
         alert("Error saving: " + error.message);
     } else {
       await fetchAccounts();
-      setInitialState(JSON.stringify({ form: { ...editForm, contract_value: finalValue }, products: products }));
+      setInitialState(JSON.stringify({ form: editForm, positions: positions }));
       setHasUnsavedChanges(false);
     }
   };
@@ -391,29 +378,20 @@ export default function AccountsDashboard() {
     setEditForm({ ...editForm, contract_url: url });
   };
 
-  const handleAddProduct = () => {
-    setProducts([...products, { 
-        id: Date.now(), 
-        name: '', 
-        type: 'fixed', 
-        base_price: 0, 
-        commission_percent: 0, 
-        deposit_amount: 0, 
-        deposit_date: '', 
-        deposit_paid: false 
-    }]);
-  };
-
-  const updateProduct = (index: number, field: string, value: any) => {
-    const updated = [...products];
-    updated[index] = { ...updated[index], [field]: value };
-    setProducts(updated);
-  };
-
-  const removeProduct = (index: number) => {
-    const updated = [...products];
-    updated.splice(index, 1);
-    setProducts(updated);
+  const handleDeletePosition = async (positionId: string) => {
+    if (!confirm('Delete this position? This cannot be undone.')) return;
+    
+    const { error } = await supabase
+      .from('positions')
+      .delete()
+      .eq('id', positionId);
+    
+    if (error) {
+      alert('Failed to delete position: ' + error.message);
+    } else {
+      await fetchPositions(selectedAccount.id);
+      await fetchAccounts();
+    }
   };
 
   const handleAddNote = async () => {
@@ -456,80 +434,30 @@ export default function AccountsDashboard() {
     fetchAccounts(); fetchOnboarding();
   };
 
-  const toggleCollaborator = (staffId: string) => {
-    const current = editForm.collaborators || [];
-    if (current.includes(staffId)) {
-      setEditForm({ ...editForm, collaborators: current.filter((id: string) => id !== staffId) });
-    } else {
-      setEditForm({ ...editForm, collaborators: [...current, staffId] });
-    }
-  };
-
-  const getProductDisplayPrice = (p: Product) => {
-    if (p.type === 'commission') {
-      const pct = Number(p.commission_percent) || 0;
-      const base = Number(p.base_price) || 0;
-      return base * (pct / 100);
-    }
-    return Number(p.base_price) || 0;
-  };
-
-  const handleFocusSelect = (e: React.FocusEvent<HTMLInputElement>) => {
-    e.target.select();
-  };
-
-  // --- REPORT GENERATION ---
   const handleGenerateReport = () => {
     if (!selectedAccount) return;
     if (!confirm("Generate PDF Report for this account? This will contain internal sensitive data.")) return;
 
-    // Pass detailed real data to generator
     const reportData = {
       accountName: selectedAccount.name,
       domain: selectedAccount.domain || 'N/A',
       healthScore: healthDetails?.score || 0,
       contractValue: editForm.contract_value || 0,
-      products: products,
+      products: positions,
       owner: internalStaff.find(s => s.id === editForm.owner_id)?.email || 'Unassigned',
       billingEmail: editForm.billing_contact_email || 'N/A',
       paymentTerms: editForm.payment_terms || 'N/A',
       lastInteraction: selectedAccount.last_interaction_at || selectedAccount.created_at,
       notes: notes,
-      taxId: editForm.tax_id || 'N/A', // New Field
-      taxPercentage: editForm.tax_percentage || 0, // New Field
-      startDate: editForm.contract_start_date || selectedAccount.created_at, // New Field
-      endDate: editForm.contract_end_date || null, // New Field
-      sourcingBudget: healthDetails?.hoursBudget || 0 // New Field
+      taxId: editForm.tax_id || 'N/A',
+      taxPercentage: editForm.tax_percentage || 0,
+      startDate: editForm.contract_start_date || selectedAccount.created_at,
+      endDate: editForm.contract_end_date || null,
+      sourcingBudget: healthDetails?.hoursBudget || 0
     };
 
     generateAccountReport(reportData);
   };
-
-  // --- REUSABLE FOOTER SAVE ---
-  const FooterSave = ({ hasChanges, onSave }: { hasChanges: boolean, onSave: () => void }) => (
-    <div className="flex-shrink-0 pt-6 border-t border-slate-200 bg-white p-6 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-20 flex justify-end sticky bottom-0">
-      {hasChanges && (
-        <div className="absolute bottom-20 right-6 animate-in slide-in-from-bottom-2 fade-in duration-300">
-           <div className="bg-slate-800 text-white text-xs py-2 px-3 rounded shadow-lg flex items-center gap-2">
-              <span className="w-2 h-2 bg-orange-500 rounded-full animate-pulse"></span>
-              You have unsaved changes
-           </div>
-        </div>
-      )}
-      
-      <button
-        onClick={onSave}
-        className={`px-6 py-3 rounded-xl text-sm font-bold shadow-md transition-all flex items-center gap-2 text-white ${
-          hasChanges 
-            ? 'bg-orange-500 hover:bg-orange-600' 
-            : 'bg-slate-900 hover:bg-slate-800'
-        }`}
-      >
-        <Save size={16}/>
-        {hasChanges ? 'Save Changes' : 'Saved'}
-      </button>
-    </div>
-  );
 
   const totalARR = accounts.reduce((sum, a) => sum + (a.contract_value || 0), 0);
   const avgHealth = Math.round(accounts.reduce((sum, a) => sum + (a.healthScore || 0), 0) / (accounts.length || 1));
@@ -645,10 +573,7 @@ export default function AccountsDashboard() {
                         </div>
                         <div>
                           <p className="font-bold text-slate-900 text-sm">{account.name}</p>
-                          <div className="flex items-center gap-2">
-                             <p className="text-xs text-slate-500">{account.domain}</p>
-                             {account.contract_url && <Paperclip size={12} className="text-blue-500"/>}
-                          </div>
+                          <p className="text-xs text-slate-500">{account.domain}</p>
                         </div>
                       </div>
                     </td>
@@ -683,7 +608,7 @@ export default function AccountsDashboard() {
         </div>
       </div>
 
-      {/* --- EXTENDED SIDEBAR DRAWER (1000px) --- */}
+      {/* SIDEBAR OVERLAY */}
       {isSidebarOpen && (
         <div 
            className="fixed inset-0 bg-slate-900/30 backdrop-blur-[2px] z-40 transition-opacity"
@@ -691,7 +616,7 @@ export default function AccountsDashboard() {
         ></div>
       )}
       
-      {/* CONTRACT VIEWER - Sits to the left of the 1000px sidebar */}
+      {/* CONTRACT VIEWER */}
       <ContractViewer 
         isOpen={isContractOpen}
         contractUrl={editForm.contract_url}
@@ -700,11 +625,13 @@ export default function AccountsDashboard() {
         sidebarWidth="1000px"
       />
 
+      {/* SIDEBAR */}
       <div 
         className={`fixed top-0 right-0 h-full w-[1000px] bg-white shadow-2xl border-l border-slate-200 transform transition-transform duration-300 z-50 flex flex-col ${isSidebarOpen && selectedAccount ? 'translate-x-0' : 'translate-x-full'}`}
       >
         {selectedAccount && (
           <>
+            {/* Sidebar Header */}
             <div className="px-8 py-6 border-b border-slate-200 bg-slate-50 flex-shrink-0 flex justify-between items-start">
                <div className="flex items-center gap-5">
                   <div className="w-16 h-16 rounded-2xl bg-white border border-slate-200 shadow-sm flex items-center justify-center text-3xl font-bold text-slate-800">
@@ -739,338 +666,100 @@ export default function AccountsDashboard() {
                </div>
             </div>
 
+            {/* Tabs */}
             <div className="flex border-b border-slate-200 px-8 gap-6 bg-slate-50/50 flex-shrink-0">
                {[
                  { id: 'overview', label: 'Overview', icon: LayoutDashboard },
-                 { id: 'commercials', label: 'Commercials & Finance', icon: DollarSign, alert: missingFields.some(f => REQUIRED_COMMERCIALS.includes(f)) },
-                 { id: 'team', label: 'Team & Access', icon: Users, alert: missingFields.some(f => REQUIRED_OPS.includes(f)) },
-                 { id: 'notes', label: 'Collaboration Log', icon: MessageSquare }
-               ].map((tab) => (
+                 { id: 'finance', label: 'Finance', icon: DollarSign, alert: missingFields.some(f => REQUIRED_COMMERCIALS.includes(f)) },
+                 { id: 'positions', label: 'Positions', icon: Building2, badge: positions.length },
+                 { id: 'team', label: 'Team', icon: Users, alert: missingFields.some(f => REQUIRED_OPS.includes(f)) },
+                 { id: 'notes', label: 'Notes', icon: MessageSquare }
+               ].map((tab: any) => (
                   <button 
                     key={tab.id}
                     onClick={() => setActiveTab(tab.id as Tab)}
                     className={`py-4 text-sm font-bold border-b-2 transition-colors flex items-center gap-2 ${activeTab === tab.id ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
                   >
                     <tab.icon size={16} /> {tab.label}
+                    {tab.badge !== undefined && tab.badge > 0 && (
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${activeTab === tab.id ? 'bg-slate-900 text-white' : 'bg-slate-200 text-slate-600'}`}>
+                        {tab.badge}
+                      </span>
+                    )}
                     {tab.alert && <span className="h-2 w-2 rounded-full bg-red-500"></span>}
                   </button>
                ))}
             </div>
 
-            {/* Content Area - Now Flex to support fixed footer */}
+            {/* Tab Content */}
             <div className="flex-1 overflow-hidden bg-white relative">
-               
                {activeTab === 'overview' && (
-                  <div className="flex flex-col h-full animate-in fade-in duration-300">
-                     <div className="flex-1 overflow-y-auto p-8 space-y-8">
-                        <div className="flex justify-between items-center mb-4">
-                            <h2 className="text-xl font-bold text-slate-800">Project Health & Timeline</h2>
-                        </div>
-
-                        <div className="p-6 bg-gradient-to-br from-slate-50 to-white rounded-2xl border border-slate-200 shadow-sm relative overflow-visible">
-                            <div className="flex justify-between items-start mb-4 relative z-10">
-                              <div>
-                                <div className="flex items-center gap-2 mb-1">
-                                  <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Account Health Score</p>
-                                  <div className="group relative">
-                                    <Info size={14} className="text-slate-400 cursor-help"/>
-                                    <div className="absolute left-6 top-0 w-80 bg-slate-900 text-white text-[11px] p-4 rounded-xl shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-[60] leading-relaxed">
-                                      <p className="font-bold text-slate-200 mb-2 border-b border-slate-700 pb-1">Scoring Logic:</p>
-                                      <ul className="space-y-1 text-slate-400 list-disc list-inside">
-                                        <li>Cost Basis: <strong>${editForm.hourly_rate_estimate}/hr</strong></li>
-                                        <li>Sourcing Budget: {editForm.budget_rule_percentage}% of Value</li>
-                                        <li>Target: <strong>{healthDetails?.hoursBudget} hours</strong> allocated</li>
-                                        <li>Penalties: Overdue (-40), Stale (-20), Low Margin (-25)</li>
-                                      </ul>
-                                    </div>
-                                  </div>
-                                </div>
-                                <div className="flex items-baseline gap-2">
-                                  <h3 className="text-5xl font-light text-slate-900">{healthDetails?.score}</h3>
-                                  <span className="text-sm text-slate-400">/ 100</span>
-                                </div>
-                              </div>
-                              <div className={`p-3 rounded-xl ${healthDetails?.score > 80 ? 'bg-green-100 text-green-600' : 'bg-orange-100 text-orange-600'}`}>
-                                <Activity size={24}/>
-                              </div>
-                            </div>
-                            <div className="space-y-2 relative z-10">
-                              {healthDetails?.reason.map((r: string, i: number) => (
-                                <div key={i} className="flex items-center gap-2 text-xs font-medium text-slate-600">
-                                  <div className={`w-2 h-2 rounded-full ${r.includes('+') ? 'bg-green-500' : 'bg-red-500'}`}></div>
-                                  {r}
-                                </div>
-                              ))}
-                            </div>
-                        </div>
-
-                        <div>
-                          <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider mb-3">Active Scope</h3>
-                          {products.length > 0 ? (
-                            <div className="grid grid-cols-2 gap-3">
-                              {products.map((p, idx) => (
-                                <div key={idx} className="p-3 bg-slate-50 border border-slate-100 rounded-lg flex justify-between items-center">
-                                  <div>
-                                    <span className="text-sm font-bold text-slate-700 block">{p.name}</span>
-                                    <span className="text-[10px] text-slate-400">{p.type === 'commission' ? 'Commission' : 'Fixed'}</span>
-                                  </div>
-                                  <span className="text-xs font-mono bg-white px-2 py-1 rounded border border-slate-200">
-                                    ${getProductDisplayPrice(p).toLocaleString()}
-                                  </span>
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <p className="text-sm text-slate-400 italic">No products/positions defined in Commercials.</p>
-                          )}
-                        </div>
-
-                        <div className="space-y-4">
-                            <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Timeline Operations</h3>
-                            <div className="grid grid-cols-2 gap-4">
-                              <div>
-                                  <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Project Deadline</label>
-                                  <input type="date" className="w-full p-3 border border-slate-300 rounded-xl text-sm" 
-                                    value={editForm.project_deadline || ''} 
-                                    onChange={e => setEditForm({...editForm, project_deadline: e.target.value})} 
-                                  />
-                              </div>
-                            </div>
-                        </div>
-                     </div>
-                     <FooterSave hasChanges={hasUnsavedChanges} onSave={handleSaveChanges} />
-                  </div>
+                  <OverviewTab 
+                    editForm={editForm}
+                    setEditForm={setEditForm}
+                    healthDetails={healthDetails}
+                    positions={positions}
+                    hasUnsavedChanges={hasUnsavedChanges}
+                    onSave={handleSaveChanges}
+                  />
                )}
 
-               {activeTab === 'commercials' && (
-                  <div className="flex flex-col h-full animate-in fade-in duration-300">
-                     <div className="flex-1 overflow-y-auto p-8 space-y-8">
-                         <div className="grid grid-cols-2 gap-4">
-                           <div className="p-6 bg-blue-50/50 rounded-2xl border border-blue-100 flex items-center justify-between">
-                              <div>
-                                <p className="text-xs font-bold text-blue-700 uppercase tracking-wider mb-1">Total Contract Value</p>
-                                <p className="text-4xl font-light text-blue-900">${editForm.contract_value?.toLocaleString()}</p>
-                                <p className="text-xs text-blue-600 mt-1">Based on active products</p>
-                              </div>
-                              <DollarSign size={40} className="text-blue-200"/>
-                           </div>
-                           <div className="p-6 bg-emerald-50/50 rounded-2xl border border-emerald-100 flex items-center justify-between">
-                              <div>
-                                <p className="text-xs font-bold text-emerald-700 uppercase tracking-wider mb-1">Sourcing Budget</p>
-                                <p className="text-4xl font-light text-emerald-900">{healthDetails?.hoursBudget}h</p>
-                                <p className="text-xs text-emerald-600 mt-1">{editForm.budget_rule_percentage}% Budget Rule @ ${editForm.hourly_rate_estimate}/hr</p>
-                              </div>
-                              <Calculator size={40} className="text-emerald-200"/>
-                           </div>
-                         </div>
+               {activeTab === 'finance' && (
+                  <FinanceTab 
+                    editForm={editForm}
+                    setEditForm={setEditForm}
+                    positions={positions}
+                    healthDetails={healthDetails}
+                    hasUnsavedChanges={hasUnsavedChanges}
+                    onSave={handleSaveChanges}
+                  />
+               )}
 
-                         <div className="space-y-4">
-                            <div className="flex justify-between items-center border-b border-slate-100 pb-2">
-                               <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2"><Briefcase size={14}/> Active Products</h4>
-                               {hasUnsavedChanges && <span className="text-xs text-orange-600 font-bold animate-pulse">Unsaved Changes</span>}
-                            </div>
-                            
-                            <div className="space-y-3">
-                               {products.map((prod, idx) => (
-                                 <div key={prod.id || idx} className={`p-4 bg-slate-50 border rounded-xl space-y-3 transition-colors ${!prod.id ? 'border-orange-200 bg-orange-50/30' : 'border-slate-200'}`}>
-                                    <div className="grid grid-cols-12 gap-3 items-center">
-                                        <div className="col-span-4"><input type="text" className="w-full bg-transparent font-bold text-sm text-slate-900 outline-none border-b border-transparent focus:border-blue-400 placeholder:text-slate-400" value={prod.name} onChange={(e) => updateProduct(idx, 'name', e.target.value)} onFocus={handleFocusSelect} placeholder="Position Name" /></div>
-                                        <div className="col-span-2"><select className="w-full bg-transparent text-xs uppercase font-bold text-slate-500 outline-none" value={prod.type} onChange={(e) => updateProduct(idx, 'type', e.target.value)}><option value="fixed">Fixed</option><option value="commission">Commission</option></select></div>
-                                        <div className="col-span-3 text-right">
-                                           <span className="text-xs text-slate-400 mr-1">{prod.type === 'commission' ? 'Placement Fee:' : 'Price:'}</span>
-                                           <input type="number" className="w-20 bg-transparent text-sm font-mono text-slate-700 text-right outline-none border-b border-transparent focus:border-blue-400" value={prod.base_price} onChange={(e) => updateProduct(idx, 'base_price', parseFloat(e.target.value) || 0)} onFocus={handleFocusSelect} />
-                                        </div>
-                                        <div className="col-span-2 text-right">
-                                           {prod.type === 'commission' ? (
-                                             <div className="flex flex-col items-end gap-1">
-                                                <div className="flex items-center justify-end gap-1">
-                                                    <input type="number" className="w-10 bg-slate-200 text-xs px-1 rounded text-right" value={prod.commission_percent} onChange={(e) => updateProduct(idx, 'commission_percent', parseFloat(e.target.value) || 0)} onFocus={handleFocusSelect} />
-                                                    <span className="text-xs text-slate-500">%</span>
-                                                </div>
-                                                <span className="text-[10px] text-green-600 font-bold">${getProductDisplayPrice(prod).toLocaleString()}</span>
-                                             </div>
-                                           ) : null}
-                                        </div>
-                                        <div className="col-span-1 text-right"><button onClick={() => removeProduct(idx)} className="text-slate-400 hover:text-red-500"><Trash2 size={16}/></button></div>
-                                    </div>
-                                    
-                                    <div className="flex items-center gap-3 pt-2 border-t border-slate-200/60">
-                                       <div className="flex items-center gap-2 text-xs text-slate-500">
-                                          <Wallet size={12}/>
-                                          Deposit: <input type="number" className="w-20 bg-slate-100 rounded px-1 text-right" value={prod.deposit_amount} onChange={(e) => updateProduct(idx, 'deposit_amount', parseFloat(e.target.value) || 0)} onFocus={handleFocusSelect} />
-                                       </div>
-                                       <div className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${Number(prod.deposit_amount) >= Number(prod.base_price) && Number(prod.base_price) > 0 ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'}`}>
-                                          {Number(prod.deposit_amount) >= Number(prod.base_price) && Number(prod.base_price) > 0 ? 'Fully Paid' : 'Partial'}
-                                       </div>
-                                    </div>
-                                 </div>
-                               ))}
-                               <button onClick={handleAddProduct} className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg text-xs font-bold border border-dashed border-slate-300 flex items-center justify-center gap-2"><Plus size={14}/> Add Position / Product</button>
-                            </div>
-                         </div>
-
-                         <div className="grid grid-cols-2 gap-8">
-                            <div className="space-y-5">
-                               <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2 flex items-center gap-2"><Activity size={14}/> Parameters</h4>
-                               <div className="grid grid-cols-2 gap-4">
-                                 <div>
-                                    <label className="text-xs font-bold text-slate-500 block mb-1">Hourly Cost Basis ($)</label>
-                                    <input type="number" className="w-full p-3 border border-slate-300 rounded-xl text-sm" value={editForm.hourly_rate_estimate} onChange={e => setEditForm({...editForm, hourly_rate_estimate: parseFloat(e.target.value)})} onFocus={handleFocusSelect} />
-                                 </div>
-                                 <div>
-                                    <label className="text-xs font-bold text-slate-500 block mb-1">Budget Rule (%)</label>
-                                    <select className="w-full p-3 border border-slate-300 rounded-xl text-sm bg-white" value={editForm.budget_rule_percentage} onChange={e => setEditForm({...editForm, budget_rule_percentage: parseFloat(e.target.value)})}>
-                                       <option value="10">10% Conservative</option><option value="15">15% Standard</option><option value="20">20% Aggressive</option><option value="25">25% High Growth</option>
-                                    </select>
-                                 </div>
-                               </div>
-                               <div className="bg-slate-50 p-3 rounded-lg text-xs text-slate-500 leading-relaxed border border-slate-200">
-                                  Use these parameters to tune the Health Score sensitivity.
-                               </div>
-                            </div>
-
-                            <div className="space-y-5">
-                               <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2 flex items-center gap-2"><Receipt size={14}/> Billing & Tax</h4>
-                               <div className={`p-3 rounded-xl border ${!editForm.billing_contact_email ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200'}`}>
-                                  <label className="text-xs font-bold text-slate-500 block mb-1">Finance Email { !editForm.billing_contact_email && <span className="text-red-500">*</span> }</label>
-                                  <input type="email" className="w-full p-2 bg-white border border-slate-300 rounded-lg text-sm" value={editForm.billing_contact_email} onChange={e => setEditForm({...editForm, billing_contact_email: e.target.value})} onFocus={handleFocusSelect}/>
-                               </div>
-                               <div className="grid grid-cols-2 gap-3">
-                                  <div><label className="text-xs font-bold text-slate-500 block mb-1">Tax ID { !editForm.tax_id && <span className="text-red-500">*</span> }</label><input type="text" className="w-full p-3 border border-slate-300 rounded-xl text-sm" value={editForm.tax_id} onChange={e => setEditForm({...editForm, tax_id: e.target.value})} onFocus={handleFocusSelect}/></div>
-                                  <div><label className="text-xs font-bold text-slate-500 block mb-1">Tax %</label><input type="number" className="w-full p-3 border border-slate-300 rounded-xl text-sm" value={editForm.tax_percentage} onChange={e => setEditForm({...editForm, tax_percentage: parseFloat(e.target.value)})} onFocus={handleFocusSelect}/></div>
-                               </div>
-                               <div><label className="text-xs font-bold text-slate-500 block mb-1">Terms { !editForm.payment_terms && <span className="text-red-500">*</span> }</label><input type="text" className="w-full p-3 border border-slate-300 rounded-xl text-sm" value={editForm.payment_terms} onChange={e => setEditForm({...editForm, payment_terms: e.target.value})} onFocus={handleFocusSelect}/></div>
-                            </div>
-                         </div>
-                     </div>
-                     <FooterSave hasChanges={hasUnsavedChanges} onSave={handleSaveChanges} />
-                  </div>
+               {activeTab === 'positions' && (
+                  <PositionsTab 
+                    positions={positions}
+                    selectedAccountId={selectedAccount.id}
+                    onCreatePosition={() => setShowCreatePosition(true)}
+                    onDeletePosition={handleDeletePosition}
+                  />
                )}
 
                {activeTab === 'team' && (
-                  <div className="flex flex-col h-full animate-in fade-in duration-300">
-                     <div className="flex-1 overflow-y-auto p-8 space-y-8">
-                         <div className="flex justify-between items-center mb-4">
-                            <h2 className="text-xl font-bold text-slate-800">Team & Access</h2>
-                         </div>
-
-                         <div className="bg-indigo-50 p-6 rounded-2xl border border-indigo-100 flex gap-4">
-                            <div className="p-2 bg-indigo-100 rounded-xl h-fit text-indigo-600"><Users size={24} /></div>
-                            <div>
-                              <h4 className="font-bold text-indigo-900 text-sm mb-1">Access Control</h4>
-                              <p className="text-xs text-indigo-800 leading-relaxed">
-                                 Manage who can view and edit this account.
-                              </p>
-                            </div>
-                         </div>
-
-                         <div className="space-y-6">
-                           <div>
-                              <label className="text-xs font-bold text-slate-500 uppercase block mb-2">Account Owner</label>
-                              <select 
-                                 className="w-full p-3 border border-slate-300 rounded-xl text-sm bg-white"
-                                 value={editForm.owner_id || ''}
-                                 onChange={(e) => setEditForm({...editForm, owner_id: e.target.value})}
-                              >
-                                 <option value="">-- Assign Owner --</option>
-                                 {internalStaff.map(s => <option key={s.id} value={s.id}>{s.email} (Owner)</option>)}
-                              </select>
-                           </div>
-
-                           <div>
-                              <label className="text-xs font-bold text-slate-500 uppercase block mb-2">Collaborators</label>
-                              <div className="grid grid-cols-2 gap-3">
-                                 {internalStaff.filter(s => s.id !== editForm.owner_id).map(staff => (
-                                    <div 
-                                      key={staff.id} 
-                                      onClick={() => toggleCollaborator(staff.id)}
-                                      className={`p-3 rounded-xl border cursor-pointer transition-all flex items-center justify-between ${editForm.collaborators?.includes(staff.id) ? 'bg-indigo-50 border-indigo-200 ring-1 ring-indigo-200' : 'bg-white border-slate-200 hover:border-slate-300'}`}
-                                    >
-                                       <div className="flex items-center gap-2">
-                                          <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${editForm.collaborators?.includes(staff.id) ? 'bg-indigo-200 text-indigo-800' : 'bg-slate-100 text-slate-500'}`}>
-                                             {staff.email.charAt(0).toUpperCase()}
-                                          </div>
-                                          <span className={`text-sm font-medium ${editForm.collaborators?.includes(staff.id) ? 'text-indigo-900' : 'text-slate-600'}`}>{staff.email.split('@')[0]}</span>
-                                       </div>
-                                       {editForm.collaborators?.includes(staff.id) && <CheckCircle size={16} className="text-indigo-600"/>}
-                                    </div>
-                                 ))}
-                              </div>
-                              {internalStaff.length === 0 && <p className="text-xs text-slate-400">No other staff available.</p>}
-                           </div>
-                         </div>
-                     </div>
-                     <FooterSave hasChanges={hasUnsavedChanges} onSave={handleSaveChanges} />
-                  </div>
+                  <TeamTab 
+                    editForm={editForm}
+                    setEditForm={setEditForm}
+                    internalStaff={internalStaff}
+                    hasUnsavedChanges={hasUnsavedChanges}
+                    onSave={handleSaveChanges}
+                  />
                )}
 
                {activeTab === 'notes' && (
-                  <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 mt-6 mx-8">
-                    <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
-                      <Users className="w-5 h-5 text-blue-900" />
-                      Team Collaboration Log
-                    </h3>
-                    
-                    {/* Input Area */}
-                    <div className="flex gap-2 mb-6">
-                      <input
-                        type="text"
-                        value={newNote}
-                        onChange={(e) => setNewNote(e.target.value)}
-                        placeholder="Add an internal update..."
-                        className="flex-1 px-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-900/20"
-                        onKeyPress={(e) => e.key === 'Enter' && handleAddNote()}
-                      />
-                      <button 
-                        onClick={handleAddNote}
-                        className="bg-slate-100 hover:bg-slate-200 text-slate-700 p-2 rounded-lg transition-colors"
-                      >
-                        <Send className="w-5 h-5" />
-                      </button>
-                    </div>
-
-                    {/* Notes List */}
-                    <div className="space-y-4">
-                      {notes.map((note) => (
-                        <div key={note.id} className="group flex gap-3 p-3 rounded-lg hover:bg-slate-50 border border-transparent hover:border-slate-100 transition-all">
-                          <div className="w-2 h-2 mt-2 rounded-full flex-shrink-0 bg-blue-400" />
-                          
-                          <div className="flex-1">
-                            <div className="flex justify-between items-start">
-                              <p className="text-xs font-bold text-slate-700">
-                                {note.profiles?.email.split('@')[0]} 
-                                <span className="text-slate-400 font-normal ml-2">• {new Date(note.created_at).toLocaleString()}</span>
-                              </p>
-                              
-                              {/* Delete Button (Only shows for Author) */}
-                              {note.author_id === currentUser?.id && (
-                                <button 
-                                  onClick={() => handleDeleteNote(note.id)}
-                                  className="text-slate-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
-                                  title="Delete note"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              )}
-                            </div>
-                            <p className="text-sm text-slate-600 mt-1">{note.content}</p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                  <NotesTab 
+                    notes={notes}
+                    newNote={newNote}
+                    setNewNote={setNewNote}
+                    currentUserId={currentUser?.id}
+                    onAddNote={handleAddNote}
+                    onDeleteNote={handleDeleteNote}
+                  />
                )}
-
             </div>
           </>
         )}
       </div>
 
-      {isSidebarOpen && selectedAccount && (
-        <div 
-           className="fixed inset-0 bg-slate-900/20 backdrop-blur-sm z-40 transition-opacity"
-           onClick={handleCloseSidebar}
-        ></div>
+      {/* CREATE POSITION MODAL */}
+      {showCreatePosition && selectedAccount && (
+        <CreatePositionModal 
+          onClose={() => setShowCreatePosition(false)}
+          onSuccess={async () => {
+            await fetchPositions(selectedAccount.id);
+            await fetchAccounts();
+            setShowCreatePosition(false);
+          }}
+          prefilledClientId={selectedAccount.id}
+        />
       )}
 
     </div>
