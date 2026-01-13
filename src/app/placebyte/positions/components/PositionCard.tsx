@@ -2,7 +2,7 @@ import React from 'react';
 import { 
   MapPin, DollarSign, Users, Clock, ArrowRight, Briefcase, 
   Zap, AlertCircle, Edit, TrendingUp, Star, Eye, Calendar,
-  BarChart3, CheckCircle2
+  BarChart3, CheckCircle2, PauseCircle
 } from 'lucide-react';
 
 interface PositionCardProps {
@@ -30,6 +30,7 @@ export default function PositionCard({ position, onClick }: PositionCardProps) {
   const isStale = daysOpen > 30;
   const isUrgent = position.priority === 'Urgent';
   const isHot = daysOpen < 7;
+  const isOnHold = position.status === 'On Hold';
   const hasPipeline = (position.pipeline_count || 0) > 0;
 
   const getPriorityColor = (priority: string) => {
@@ -78,14 +79,21 @@ export default function PositionCard({ position, onClick }: PositionCardProps) {
           </span>
 
           {/* Status Indicators */}
-          {isStale && (
+          {isOnHold && (
+            <div className="flex items-center gap-1 bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full border border-yellow-200" title="Position is on hold">
+              <PauseCircle size={10}/>
+              <span className="text-[9px] font-bold">On Hold</span>
+            </div>
+          )}
+
+          {isStale && !isOnHold && (
             <div className="flex items-center gap-1 bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full" title="Position is stale (>30 days)">
               <AlertCircle size={10}/>
               <span className="text-[9px] font-bold">Stale</span>
             </div>
           )}
 
-          {isHot && (
+          {isHot && !isOnHold && (
             <div className="flex items-center gap-1 bg-green-100 text-green-700 px-2 py-0.5 rounded-full" title="New position">
               <Zap size={10}/>
               <span className="text-[9px] font-bold">New</span>
@@ -123,10 +131,12 @@ export default function PositionCard({ position, onClick }: PositionCardProps) {
                   flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold
                   ${position.status === 'Open' 
                     ? 'bg-green-100 text-green-700' 
-                    : 'bg-slate-100 text-slate-600'
+                    : position.status === 'On Hold' 
+                        ? 'bg-yellow-100 text-yellow-700'
+                        : 'bg-slate-100 text-slate-600'
                   }
                 `}>
-                  <div className={`w-1.5 h-1.5 rounded-full ${position.status === 'Open' ? 'bg-green-500 animate-pulse' : 'bg-slate-400'}`}></div>
+                  <div className={`w-1.5 h-1.5 rounded-full ${position.status === 'Open' ? 'bg-green-500 animate-pulse' : position.status === 'On Hold' ? 'bg-yellow-500' : 'bg-slate-400'}`}></div>
                   {position.status}
                 </div>
               </>

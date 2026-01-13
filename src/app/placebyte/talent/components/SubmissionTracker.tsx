@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from "@/lib/supabaseClient";
-import { Send, Check, X, Clock, Star, MessageSquare, TrendingUp, AlertTriangle } from 'lucide-react';
+import { Send, X, Clock, Star, MessageSquare, AlertTriangle, Briefcase } from 'lucide-react';
 import { Candidate } from "@/types";
 
 interface SubmissionTrackerProps {
   candidate: Candidate;
   onClose: () => void;
+  onSuccess?: (positionId: string) => void;
 }
 
 interface Position {
@@ -25,7 +26,7 @@ interface Submission {
   time_in_current_stage: string;
 }
 
-export default function SubmissionTracker({ candidate, onClose }: SubmissionTrackerProps) {
+export default function SubmissionTracker({ candidate, onClose, onSuccess }: SubmissionTrackerProps) {
   const [positions, setPositions] = useState<Position[]>([]);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [selectedPosition, setSelectedPosition] = useState<string>('');
@@ -109,10 +110,14 @@ export default function SubmissionTracker({ candidate, onClose }: SubmissionTrac
         author_id: session?.user?.id
       }]);
 
-      fetchSubmissions();
-      setSelectedPosition('');
-      setNotes('');
-      alert('Candidate submitted successfully!');
+      if (onSuccess) {
+        onSuccess(selectedPosition);
+      } else {
+        fetchSubmissions();
+        setSelectedPosition('');
+        setNotes('');
+        alert('Candidate submitted successfully!');
+      }
     } else {
       alert('Error submitting: ' + error.message);
     }
@@ -135,7 +140,6 @@ export default function SubmissionTracker({ candidate, onClose }: SubmissionTrac
 
   const getDaysInStage = (timeInterval: string) => {
     if (!timeInterval) return 0;
-    // Parse PostgreSQL interval format
     const days = parseInt(timeInterval.split(' ')[0]) || 0;
     return days;
   };
@@ -164,7 +168,10 @@ export default function SubmissionTracker({ candidate, onClose }: SubmissionTrac
           
           {/* Submit New */}
           <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-6 mb-6">
-            <h3 className="text-lg font-bold text-gray-900 mb-4">Submit to New Position</h3>
+            <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
+                <Briefcase size={18} className="text-blue-600"/>
+                Submit to New Position
+            </h3>
             
             <div className="space-y-4">
               <div>
@@ -188,20 +195,22 @@ export default function SubmissionTracker({ candidate, onClose }: SubmissionTrac
                 <textarea
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  placeholder="Add any notes about this submission..."
+                  placeholder="Add any notes regarding this submission for the client..."
                   rows={3}
                   className="w-full px-4 py-2.5 border-2 border-gray-300 rounded-lg focus:border-blue-500 outline-none text-gray-900 resize-none"
                 />
               </div>
 
-              <button
-                onClick={handleSubmit}
-                disabled={submitting || !selectedPosition}
-                className="bg-blue-600 text-white px-6 py-2.5 rounded-lg font-bold hover:bg-blue-700 transition flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Send size={16}/>
-                {submitting ? 'Submitting...' : 'Submit Candidate'}
-              </button>
+              <div className="flex justify-end">
+                <button
+                    onClick={handleSubmit}
+                    disabled={submitting || !selectedPosition}
+                    className="bg-blue-600 text-white px-6 py-2.5 rounded-lg font-bold hover:bg-blue-700 transition flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-blue-200"
+                >
+                    <Send size={16}/>
+                    {submitting ? 'Submitting...' : 'Submit Candidate'}
+                </button>
+              </div>
             </div>
           </div>
 

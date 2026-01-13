@@ -24,6 +24,7 @@ const formatCurrency = (amount: number) => {
 
 // Helper for relative time
 const getRelativeTime = (dateString: string) => {
+  if (!dateString) return 'Just now';
   const date = new Date(dateString);
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
@@ -39,11 +40,28 @@ const getRelativeTime = (dateString: string) => {
 
 /**
  * Component to link a candidate to the position manually
+ * Now filters out candidates already in the pipeline
  */
 function ManualCandidateLink({ positionId, onLink }: { positionId: string, onLink: () => void }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<any[]>([]);
   const [searching, setSearching] = useState(false);
+  const [existingIds, setExistingIds] = useState<Set<string>>(new Set());
+
+  // Fetch existing IDs on mount to filter them out
+  useEffect(() => {
+    const fetchExisting = async () => {
+      const { data } = await supabase
+        .from('client_submissions')
+        .select('candidate_id')
+        .eq('position_id', positionId);
+      
+      if (data) {
+        setExistingIds(new Set(data.map(item => item.candidate_id)));
+      }
+    };
+    fetchExisting();
+  }, [positionId]);
 
   const searchCandidates = async (val: string) => {
     setQuery(val);
@@ -52,36 +70,53 @@ function ManualCandidateLink({ positionId, onLink }: { positionId: string, onLin
       return;
     }
     setSearching(true);
+    
+    // Safer: Select * to avoid missing column errors during search
     const { data } = await supabase
       .from('candidates')
-      .select('id, name, role, email')
+      .select('*')
       .ilike('name', `%${val}%`)
-      .limit(5);
-    setResults(data || []);
+      .limit(10); // Fetch a bit more to account for filtering
+      
+    if (data) {
+      // Filter out candidates already in the pipeline
+      const filtered = data.filter(c => !existingIds.has(c.id));
+      setResults(filtered.slice(0, 5));
+    } else {
+      setResults([]);
+    }
     setSearching(false);
   };
 
   const linkCandidate = async (candidateId: string) => {
+    if (existingIds.has(candidateId)) {
+        alert("This candidate is already in the pipeline.");
+        return;
+    }
+
     const { data: { session } } = await supabase.auth.getSession();
+    
     const { error } = await supabase.from('client_submissions').insert([{
       position_id: positionId,
       candidate_id: candidateId,
       status: 'Submitted',
-      stage: 'Sourced',
-      submitted_by: session?.user?.id
+      stage: 'Submitted',
+      submitted_by: session?.user?.id,
+      submitted_at: new Date().toISOString()
     }]);
 
     if (!error) {
       setQuery("");
       setResults([]);
+      setExistingIds(prev => new Set(prev).add(candidateId)); // Add to local filter
       onLink();
     } else {
-      alert("Already linked or error: " + error.message);
+      alert("Error linking candidate: " + error.message);
     }
   };
 
   return (
-    <div className="relative mt-4">
+    <div className="relative mt-2">
       <div className="relative">
         <Search className="absolute left-3 top-2.5 text-slate-400" size={14} />
         <input 
@@ -93,18 +128,18 @@ function ManualCandidateLink({ positionId, onLink }: { positionId: string, onLin
         />
       </div>
       {results.length > 0 && (
-        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-xl z-50 overflow-hidden">
+        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-xl z-50 overflow-hidden max-h-60 overflow-y-auto">
           {results.map(c => (
             <button 
               key={c.id} 
               onClick={() => linkCandidate(c.id)}
-              className="w-full text-left px-4 py-2 text-xs hover:bg-slate-50 flex justify-between items-center"
+              className="w-full text-left px-4 py-2 text-xs hover:bg-slate-50 flex justify-between items-center border-b border-slate-50 last:border-0"
             >
-              <div>
-                <p className="font-bold text-slate-900">{c.name}</p>
-                <p className="text-[10px] text-slate-500">{c.role}</p>
+              <div className="flex-1 min-w-0 mr-2">
+                <p className="font-bold text-slate-900 truncate">{c.name}</p>
+                <p className="text-[10px] text-slate-500 truncate">{c.role || c.current_role || 'No Role'}</p>
               </div>
-              <Plus size={14} className="text-blue-500" />
+              <Plus size={14} className="text-blue-500 flex-shrink-0" />
             </button>
           ))}
         </div>
@@ -114,18 +149,30 @@ function ManualCandidateLink({ positionId, onLink }: { positionId: string, onLin
 }
 
 /**
- * AI Matching Component
- * Threshold set to 40% as requested.
+ * Extended AI Matching Component
+ * - Uses weighted scoring
+ * - Fallback to keyword matching if skills are missing
  */
-function SuggestedCandidates({ positionSkills, positionId, onLink }: { positionSkills: string[], positionId: string, onLink: () => void }) {
+function SuggestedCandidates({ position, onLink }: { position: any, onLink: () => void }) {
   const [matches, setMatches] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const findMatches = async () => {
+      setLoading(true);
+      
+      // 1. Fetch existing submissions to exclude them
+      const { data: existing } = await supabase
+        .from('client_submissions')
+        .select('candidate_id')
+        .eq('position_id', position.id);
+      
+      const existingIds = new Set(existing?.map(e => e.candidate_id) || []);
+
+      // 2. Fetch active candidates
       const { data: candidates } = await supabase
         .from('candidates')
-        .select('id, name, role, skills, avatar_color')
+        .select('*') 
         .eq('is_deleted', false)
         .neq('status', 'Placed');
 
@@ -134,61 +181,142 @@ function SuggestedCandidates({ positionSkills, positionId, onLink }: { positionS
         return;
       }
 
-      const scored = candidates.map((c: any) => {
-        if (!c.skills || !positionSkills || positionSkills.length === 0) return { ...c, score: 0 };
-        const candidateSkills = Array.isArray(c.skills) ? c.skills.map((s: string) => s.toLowerCase()) : [];
-        const requiredSkills = positionSkills.map(s => s.toLowerCase());
-        const intersection = requiredSkills.filter(s => candidateSkills.includes(s));
-        const score = Math.round((intersection.length / requiredSkills.length) * 100);
-        return { ...c, score, overlap: intersection.length };
-      });
+      // 3. Extended Scoring Logic
+      const tokenize = (text: string) => text.toLowerCase().replace(/[^\w\s]/g, '').split(/\s+/).filter(Boolean);
+      
+      const posSkills = (position.skills || position.requirements || []).map((s: string) => s.toLowerCase());
+      const posTitle = (position.title || '').toLowerCase();
+      const posTitleTokens = tokenize(posTitle);
+      const posLocation = (position.location || '').toLowerCase();
+      const posDesc = (position.description || '').toLowerCase();
 
-      // Filter: Nothing below 40%
-      setMatches(scored.filter((c: any) => c.score >= 40).sort((a: any, b: any) => b.score - a.score).slice(0, 5));
+      const scored = candidates
+        .filter(c => !existingIds.has(c.id)) // Filter out already submitted
+        .map((c: any) => {
+          let score = 0;
+          
+          // A. Role/Title Match (Max 35 pts)
+          const candRole = (c.role || c.current_role || '').toLowerCase();
+          const candRoleTokens = tokenize(candRole);
+          
+          if (candRole === posTitle && candRole.length > 0) {
+            score += 35; // Perfect match
+          } else {
+             // Token Overlap (e.g. "Senior React Dev" vs "React Developer")
+             const intersection = posTitleTokens.filter(t => candRoleTokens.includes(t));
+             if (intersection.length > 0 && posTitleTokens.length > 0) {
+                // Rewarding overlap based on percentage of position title covered
+                const overlapScore = (intersection.length / posTitleTokens.length) * 30;
+                score += overlapScore;
+             }
+          }
+
+          // B. Skills Match (Max 40 pts)
+          const candSkills = (c.skills || []).map((s: string) => s.toLowerCase());
+          const candSummary = (c.summary || '').toLowerCase();
+          
+          let matchedSkillsCount = 0;
+          if (posSkills.length > 0) {
+             // 1. Check explicit tags
+             const explicitMatches = posSkills.filter((ps: string) => candSkills.some((cs: string) => cs.includes(ps) || ps.includes(cs)));
+             matchedSkillsCount += explicitMatches.length;
+             
+             // 2. Check summary for missing skills (Deep Search)
+             const missingSkills = posSkills.filter((ps: string) => !explicitMatches.includes(ps));
+             if (candSummary) {
+                const summaryMatches = missingSkills.filter((ms: string) => candSummary.includes(ms));
+                matchedSkillsCount += summaryMatches.length;
+             }
+
+             const skillScore = (matchedSkillsCount / posSkills.length) * 40;
+             score += skillScore;
+          }
+
+          // C. Location Match (Max 20 pts)
+          const candLocation = (c.location || '').toLowerCase();
+          const isRemotePos = posLocation.includes('remote');
+          const isRemoteCand = candLocation.includes('remote');
+
+          if (posLocation && candLocation && (posLocation.includes(candLocation) || candLocation.includes(posLocation))) {
+             score += 20;
+          } else if (isRemotePos && isRemoteCand) {
+             score += 15;
+          }
+
+          // D. Experience/Seniority (Max 5 pts)
+          if (posTitle.includes('senior') && (candRole.includes('senior') || (c.experience_years && c.experience_years > 5))) {
+            score += 5;
+          }
+
+          return { 
+            ...c, 
+            score: Math.min(Math.round(score), 100)
+          };
+        });
+
+      // Filter: Show top 20 matches with score > 5% (Very lenient to ensure results appear)
+      setMatches(scored.filter((c: any) => c.score > 5).sort((a: any, b: any) => b.score - a.score).slice(0, 20));
       setLoading(false);
     };
 
-    findMatches();
-  }, [positionSkills, positionId]);
+    if(position) findMatches();
+  }, [position, onLink]);
 
   const handleQuickLink = async (candidateId: string) => {
     const { data: { session } } = await supabase.auth.getSession();
     await supabase.from('client_submissions').insert([{
-      position_id: positionId,
+      position_id: position.id,
       candidate_id: candidateId,
       status: 'Submitted',
-      stage: 'Sourced',
-      submitted_by: session?.user?.id
+      stage: 'Submitted',
+      submitted_by: session?.user?.id,
+      submitted_at: new Date().toISOString()
     }]);
     onLink();
+    // Remove from matches locally to update UI immediately
+    setMatches(prev => prev.filter(m => m.id !== candidateId));
   };
 
-  if (loading) return <div className="p-4 text-xs text-slate-400 italic">Analyzing pool...</div>;
+  if (loading) return (
+    <div className="flex flex-col items-center justify-center p-8 text-slate-400">
+        <Loader2 size={24} className="animate-spin mb-2"/>
+        <p className="text-xs">Analyzing talent pool...</p>
+    </div>
+  );
 
   return (
     <div className="space-y-3 mt-1">
       {matches.map(c => (
         <div key={c.id} className="flex items-center justify-between p-3 border border-slate-100 rounded-xl hover:bg-slate-50 transition-colors group">
-          <div className="flex items-center gap-3">
-             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${c.avatar_color || 'bg-gray-100'}`}>
-                {c.name[0]}
+          <div className="flex items-center gap-3 min-w-0">
+             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${c.avatar_color || 'bg-gray-100'}`}>
+                {c.name?.[0] || '?'}
              </div>
              <div className="min-w-0">
-                <p className="text-sm font-bold text-slate-900 truncate">{c.name}</p>
-                <p className="text-[10px] text-slate-500 truncate">{c.role}</p>
+                <div className="flex items-center gap-2">
+                    <p className="text-sm font-bold text-slate-900 truncate">{c.name}</p>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${c.score > 70 ? 'bg-green-100 text-green-700' : c.score > 40 ? 'bg-blue-50 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
+                        {c.score}% Match
+                    </span>
+                </div>
+                <p className="text-[10px] text-slate-500 truncate">{c.role || c.current_role}</p>
              </div>
           </div>
-          <div className="flex items-center gap-3">
-             <div className="text-right">
-                <p className="text-xs font-bold text-green-600">{c.score}%</p>
-             </div>
-             <button onClick={() => handleQuickLink(c.id)} className="p-1.5 bg-slate-900 text-white rounded-lg opacity-0 group-hover:opacity-100">
-                <ArrowRight size={14}/>
-             </button>
-          </div>
+          <button 
+            onClick={() => handleQuickLink(c.id)} 
+            className="p-2 bg-slate-900 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity hover:bg-blue-600" 
+            title="Quick Add to Pipeline"
+          >
+            <Plus size={14}/>
+          </button>
         </div>
       ))}
-      {matches.length === 0 && <p className="text-xs text-slate-400 italic py-2">No matches above 40% found.</p>}
+      {matches.length === 0 && (
+        <div className="text-center py-6 border border-dashed border-slate-200 rounded-xl">
+            <p className="text-xs text-slate-400 italic">No matches found.</p>
+            <p className="text-[10px] text-slate-300 mt-1">Try updating the position requirements or manual search.</p>
+        </div>
+      )}
     </div>
   );
 }
@@ -234,59 +362,53 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
     if (!positionId) return;
     
     try {
-      const { data, error } = await supabase
-        .from('positions')
-        .select(`
-          *, 
-          client:clients(id, name, description, website, location), 
-          owner:profiles(id, email, full_name)
-        `)
-        .eq('id', positionId)
-        .single();
-
-      if (error) throw error;
-
-      if (data) {
-        setPosition(data);
-        setEditForm({
-          ...data,
-          location: data.location || '',
-          description: data.description || '',
-          title: data.title || '',
-          company_intel: data.company_intel || '',
-          requirements: data.requirements || [],
-          benefits: data.benefits || [],
-        });
-      }
-    } catch (err) {
-      console.warn("Complex fetch failed, falling back to simple fetch.", err);
-      
-      const { data: simpleData } = await supabase
+      // 1. Fetch Position First
+      const { data: posData, error: posError } = await supabase
         .from('positions')
         .select('*')
         .eq('id', positionId)
         .single();
+
+      if (posError) throw posError;
+      if (!posData) return;
+
+      // 2. Fetch Client Details separately to ensure we get them
+      let clientData: any = {};
       
-      if (simpleData) {
-        let clientData = {};
-        if (simpleData.client_id) {
+      if (posData.client_id) {
           const { data: c } = await supabase
             .from('clients')
-            .select('name, description, website, location')
-            .eq('id', simpleData.client_id)
+            .select('*') // Safer than listing columns
+            .eq('id', posData.client_id)
             .single();
           if (c) clientData = c;
-        }
-        
-        const completeData = { 
-            ...simpleData, 
-            client: clientData,
-            requirements: simpleData.requirements || [],
-            benefits: simpleData.benefits || []
-        };
-        setPosition(completeData);
-        setEditForm(completeData);
       }
+
+      // 3. Fetch Owner Details separately
+      let ownerData = {};
+      if (posData.owner_id) {
+          const { data: o } = await supabase
+            .from('profiles')
+            .select('id, email, full_name')
+            .eq('id', posData.owner_id)
+            .single();
+          if (o) ownerData = o;
+      }
+
+      // 4. Combine
+      const completeData = {
+          ...posData,
+          client: clientData,
+          owner: ownerData,
+          requirements: posData.requirements || [],
+          benefits: posData.benefits || []
+      };
+
+      setPosition(completeData);
+      setEditForm(completeData);
+
+    } catch (err) {
+      console.error("Position fetch failed:", err);
     } finally {
       setLoading(false);
     }
@@ -294,12 +416,53 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
 
   const fetchPipeline = async () => {
     if (!positionId) return;
-    const { data } = await supabase
+    
+    // Step 1: Fetch Submissions (the linking table)
+    const { data: submissions, error: subError } = await supabase
       .from('client_submissions')
-      .select('*, candidate:candidates(id, name, email, phone, linkedin_url, current_role, experience_years, location)')
+      .select('*')
       .eq('position_id', positionId)
-      .order('created_at', { ascending: false });
-    if (data) setPipeline(data);
+      .order('submitted_at', { ascending: false });
+    
+    if (subError) {
+        console.error("Pipeline fetch error:", subError);
+        return;
+    }
+    
+    if (!submissions || submissions.length === 0) {
+        setPipeline([]);
+        return;
+    }
+
+    // Step 2: Fetch Candidates (the people)
+    const candidateIds = Array.from(new Set(submissions.map(s => s.candidate_id).filter(Boolean)));
+    
+    if (candidateIds.length === 0) {
+        setPipeline(submissions);
+        return;
+    }
+
+    const { data: candidates, error: candError } = await supabase
+      .from('candidates')
+      .select('*')
+      .in('id', candidateIds);
+
+    if (candError) {
+        console.error("Pipeline candidates error:", candError);
+    }
+
+    // Step 3: Merge Data in Javascript to bypass JOIN errors
+    const candidateMap = new Map();
+    if (candidates) {
+        candidates.forEach(c => candidateMap.set(c.id, c));
+    }
+
+    const mergedPipeline = submissions.map(sub => ({
+        ...sub,
+        candidate: candidateMap.get(sub.candidate_id) || null
+    }));
+
+    setPipeline(mergedPipeline);
   };
 
   const fetchActivityLogs = async () => {
@@ -307,13 +470,6 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
     const mockLogs = [
       {
         id: 1,
-        user: "Sarah Chen",
-        action: "status_change",
-        description: "Updated position status to Open",
-        created_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-      },
-      {
-        id: 2,
         user: "System",
         action: "created",
         description: "Position created",
@@ -321,6 +477,22 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
       }
     ];
     setLogs(mockLogs);
+  };
+
+  const handleRemoveCandidate = async (submissionId: string) => {
+    if (!confirm('Are you sure you want to remove this candidate from the pipeline?')) return;
+
+    const { error } = await supabase
+      .from('client_submissions')
+      .delete()
+      .eq('id', submissionId);
+
+    if (error) {
+      alert('Error removing candidate: ' + error.message);
+    } else {
+      // Optimistic update
+      setPipeline(prev => prev.filter(p => p.id !== submissionId));
+    }
   };
 
   const handleSave = async () => {
@@ -405,16 +577,6 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
     return formatCurrency(mid * ((Number(position?.fee_percentage) || 0) / 100));
   };
 
-  const getStatusColor = (status: string) => {
-    const colors: Record<string, string> = {
-      'Open': 'bg-green-500',
-      'Filled': 'bg-blue-500',
-      'On Hold': 'bg-yellow-500',
-      'Cancelled': 'bg-slate-400',
-    };
-    return colors[status] || 'bg-slate-400';
-  };
-
   const getPriorityColor = (priority: string) => {
     const colors: Record<string, { bg: string; text: string; border: string }> = {
       'Urgent': { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-200' },
@@ -436,9 +598,9 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
     return colors[stage] || 'bg-slate-50 text-slate-700 border-slate-200';
   };
 
-  const filteredPipeline = pipelineFilter === 'all' 
-    ? pipeline 
-    : pipeline.filter(p => p.stage?.toLowerCase() === pipelineFilter.toLowerCase());
+  const filteredPipeline = pipeline
+    ? pipeline.filter(p => !pipelineFilter || pipelineFilter === 'all' || p.stage?.toLowerCase() === pipelineFilter.toLowerCase())
+    : [];
 
   const pipelineStats = {
     total: pipeline.length,
@@ -590,7 +752,7 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
         <div className="flex px-8 border-b border-slate-200 bg-white flex-shrink-0 overflow-x-auto">
           {[
             { id: 'overview', label: 'Overview', icon: Target },
-            { id: 'pipeline', label: 'Pipeline', icon: Users, badge: pipeline.length },
+            { id: 'pipeline', label: `Pipeline (${pipeline.length})`, icon: Users, badge: pipeline.length },
             { id: 'activity', label: 'Activity', icon: Activity, badge: logs.length },
           ].map((tab) => (
             <button
@@ -738,28 +900,9 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
 
                   </div>
 
-                  {/* Right Column: Meta & AI Matching */}
+                  {/* Right Column: Meta */}
                   <div className="col-span-4 space-y-5">
                     
-                    {/* AI Talent Matching Section */}
-                    <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm ring-4 ring-purple-50">
-                      <div className="flex items-center justify-between mb-4">
-                        <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wide flex items-center gap-2">
-                          <Sparkles size={14} className="text-purple-500"/> AI Talent Matching
-                        </h4>
-                      </div>
-                      <SuggestedCandidates 
-                        positionSkills={position?.skills || []} 
-                        positionId={positionId!} 
-                        onLink={fetchPipeline}
-                      />
-                      
-                      <div className="pt-6 mt-6 border-t border-slate-100">
-                        <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Manual Link</h4>
-                        <ManualCandidateLink positionId={positionId!} onLink={fetchPipeline} />
-                      </div>
-                    </div>
-
                     {/* Status Card */}
                     <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
                       <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-4 flex items-center gap-2">
@@ -780,7 +923,7 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
                         <div className="space-y-3">
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-3">
-                              <div className={`w-3 h-3 rounded-full ${getStatusColor(position.status)} ${position.status === 'Open' ? 'animate-pulse' : ''}`}></div>
+                              <div className={`w-3 h-3 rounded-full bg-green-500 ${position.status === 'Open' ? 'animate-pulse' : ''}`}></div>
                               <span className="font-bold text-slate-900 text-lg">{position.status}</span>
                             </div>
                           </div>
@@ -873,106 +1016,159 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
 
               {/* === TAB: PIPELINE === */}
               {activeTab === 'pipeline' && (
-                <div className="animate-in fade-in slide-in-from-bottom-2 duration-300 space-y-6">
+                <div className="animate-in fade-in slide-in-from-bottom-2 duration-300 grid grid-cols-1 lg:grid-cols-4 gap-6">
                   
-                  {/* Pipeline Stats */}
-                  <div className="grid grid-cols-5 gap-4">
-                    {[
-                      { label: 'Total', count: pipelineStats.total, color: 'bg-slate-100 text-slate-900' },
-                      { label: 'Submitted', count: pipelineStats.submitted, color: 'bg-blue-50 text-blue-700' },
-                      { label: 'Screening', count: pipelineStats.screening, color: 'bg-purple-50 text-purple-700' },
-                      { label: 'Interview', count: pipelineStats.interview, color: 'bg-indigo-50 text-indigo-700' },
-                      { label: 'Offer', count: pipelineStats.offer, color: 'bg-green-50 text-green-700' },
-                    ].map(stat => (
-                      <div key={stat.label} className={`${stat.color} p-4 rounded-xl border border-opacity-20 shadow-sm`}>
-                        <p className="text-xs font-bold opacity-70 uppercase mb-1">{stat.label}</p>
-                        <p className="text-3xl font-bold">{stat.count}</p>
-                      </div>
-                    ))}
+                  {/* LEFT: Add Candidate Tools */}
+                  <div className="lg:col-span-1 space-y-6">
+                     
+                     {/* AI Matching Section */}
+                     <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm ring-4 ring-purple-50">
+                        <div className="flex items-center justify-between mb-4">
+                          <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wide flex items-center gap-2">
+                            <Sparkles size={14} className="text-purple-500"/> AI Matching
+                          </h4>
+                        </div>
+                        <SuggestedCandidates 
+                          position={position} 
+                          onLink={fetchPipeline}
+                        />
+                     </div>
+
+                     {/* Manual Link Section */}
+                     <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+                        <h4 className="text-xs font-bold text-slate-500 uppercase mb-3">Add Manually</h4>
+                        <ManualCandidateLink positionId={positionId!} onLink={fetchPipeline} />
+                     </div>
+
+                     {/* Stats Summary */}
+                     <div className="bg-slate-100 p-5 rounded-xl border border-slate-200">
+                        <h4 className="text-xs font-bold text-slate-500 uppercase mb-3">Pipeline Stats</h4>
+                        <div className="space-y-2">
+                           <div className="flex justify-between text-sm"><span className="text-slate-600">Total</span><span className="font-bold">{pipelineStats.total}</span></div>
+                           <div className="h-px bg-slate-200 my-1"></div>
+                           <div className="flex justify-between text-xs"><span className="text-slate-500">Submitted</span><span className="font-medium">{pipelineStats.submitted}</span></div>
+                           <div className="flex justify-between text-xs"><span className="text-slate-500">Screening</span><span className="font-medium">{pipelineStats.screening}</span></div>
+                           <div className="flex justify-between text-xs"><span className="text-slate-500">Interview</span><span className="font-medium">{pipelineStats.interview}</span></div>
+                           <div className="flex justify-between text-xs"><span className="text-slate-500">Offer</span><span className="font-medium">{pipelineStats.offer}</span></div>
+                        </div>
+                     </div>
                   </div>
 
-                  {/* Candidates Grid */}
-                  {filteredPipeline.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-20 bg-white rounded-2xl border-2 border-dashed border-slate-300">
-                      <div className="p-5 bg-slate-50 rounded-full mb-4">
-                        <Users size={40} className="text-slate-300"/>
-                      </div>
-                      <p className="text-slate-600 font-bold text-lg">No candidates yet</p>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {filteredPipeline.map(sub => (
-                        <div key={sub.id} className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:shadow-lg transition-all group cursor-pointer relative overflow-hidden">
-                          <div className={`absolute top-0 left-0 w-1.5 h-full ${
-                            sub.stage === 'Offer' ? 'bg-green-500' : 
-                            sub.stage === 'Interview' ? 'bg-indigo-500' :
-                            sub.stage === 'Screening' ? 'bg-purple-500' : 'bg-blue-500'
-                          }`}></div>
-                          
-                          <div className="flex justify-between items-start mb-4 pl-2">
-                            <div className="flex items-center gap-3 flex-1 min-w-0">
-                              <div className="w-11 h-11 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center text-white font-bold text-lg shadow-md flex-shrink-0">
-                                {sub.candidate?.name?.charAt(0)?.toUpperCase() || '?'}
-                              </div>
-                              <div className="min-w-0">
-                                <h4 className="font-bold text-slate-900 leading-tight truncate">{sub.candidate?.name || 'Unknown'}</h4>
-                                <p className="text-xs text-slate-500 truncate">{sub.candidate?.current_role || 'No role specified'}</p>
-                              </div>
-                            </div>
-                            <button className="text-slate-300 hover:text-slate-600 group-hover:opacity-100 opacity-0 transition-all">
-                              <MoreHorizontal size={16}/>
-                            </button>
-                          </div>
-
-                          <div className="pl-2 space-y-3">
-                            <div className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border ${getStageColor(sub.stage)}`}>
-                              <div className="w-1.5 h-1.5 rounded-full bg-current"></div>
-                              {sub.stage}
-                            </div>
-                            
-                            {sub.candidate?.location && (
-                              <div className="flex items-center gap-2 text-xs text-slate-600">
-                                <MapPin size={12} className="text-slate-400"/>
-                                {sub.candidate.location}
-                              </div>
-                            )}
-                            
-                            {sub.candidate?.experience_years && (
-                              <div className="flex items-center gap-2 text-xs text-slate-600">
-                                <Briefcase size={12} className="text-slate-400"/>
-                                {sub.candidate.experience_years}+ years experience
-                              </div>
-                            )}
-
-                            <div className="flex items-center gap-2 pt-3 border-t border-slate-100">
-                              {sub.candidate?.email && (
-                                <a href={`mailto:${sub.candidate.email}`} className="p-1.5 bg-slate-50 hover:bg-blue-50 text-slate-600 hover:text-blue-600 rounded transition-colors" onClick={e => e.stopPropagation()}>
-                                  <Mail size={14}/>
-                                </a>
-                              )}
-                              {sub.candidate?.phone && (
-                                <a href={`tel:${sub.candidate.phone}`} className="p-1.5 bg-slate-50 hover:bg-green-50 text-slate-600 hover:text-green-600 rounded transition-colors" onClick={e => e.stopPropagation()}>
-                                  <Phone size={14}/>
-                                </a>
-                              )}
-                              {sub.candidate?.linkedin_url && (
-                                <a href={sub.candidate.linkedin_url} target="_blank" rel="noopener noreferrer" className="p-1.5 bg-slate-50 hover:bg-blue-50 text-slate-600 hover:text-blue-600 rounded transition-colors" onClick={e => e.stopPropagation()}>
-                                  <Linkedin size={14}/>
-                                </a>
-                              )}
-                              
-                              <div className="flex-1"></div>
-                              
-                              <span className="text-xs text-slate-400 flex items-center gap-1">
-                                <Clock size={11}/>
-                                {getRelativeTime(sub.created_at)}
-                              </span>
-                            </div>
-                          </div>
+                  {/* RIGHT: Candidate List */}
+                  <div className="lg:col-span-3 space-y-4">
+                    {filteredPipeline.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center py-20 bg-white rounded-2xl border-2 border-dashed border-slate-300 h-full">
+                        <div className="p-5 bg-slate-50 rounded-full mb-4">
+                          <Users size={40} className="text-slate-300"/>
                         </div>
-                      ))}
-                    </div>
-                  )}
+                        <p className="text-slate-600 font-bold text-lg">Pipeline Empty</p>
+                        <p className="text-sm text-slate-500 mt-1">
+                          Use the tools on the left to add candidates.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="grid gap-4">
+                        {filteredPipeline.map(sub => (
+                          <div 
+                            key={sub.id} 
+                            className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:shadow-lg transition-all group cursor-pointer relative overflow-hidden"
+                          >
+                            {/* Stage indicator line */}
+                            <div className={`
+                              absolute top-0 left-0 w-1 h-full
+                              ${sub.stage === 'Offer' ? 'bg-green-500' : 
+                                sub.stage === 'Interview' ? 'bg-indigo-500' :
+                                sub.stage === 'Screening' ? 'bg-purple-500' : 'bg-blue-500'}
+                            `}></div>
+
+                            <div className="flex justify-between items-start mb-3 pl-2">
+                              <div className="flex items-center gap-3 flex-1 min-w-0">
+                                <div className="w-11 h-11 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center text-white font-bold text-lg shadow-md flex-shrink-0">
+                                  {sub.candidate?.name?.charAt(0)?.toUpperCase() || '?'}
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <h4 className="font-bold text-slate-900 group-hover:text-blue-600 transition-colors truncate">
+                                    {sub.candidate?.name || 'Unknown Candidate'}
+                                  </h4>
+                                  <p className="text-xs text-slate-500 truncate">
+                                    {sub.candidate?.role || sub.candidate?.current_role || 'No role specified'}
+                                  </p>
+                                </div>
+                              </div>
+
+                              <div className={`
+                                px-3 py-1 rounded-lg text-xs font-bold border ${getStageColor(sub.stage)}
+                              `}>
+                                {sub.stage}
+                              </div>
+                            </div>
+
+                            <div className="pl-2 space-y-3">
+                              {sub.candidate?.location && (
+                                <div className="flex items-center gap-2 text-xs text-slate-600">
+                                  <MapPin size={12} className="text-slate-400"/>
+                                  {sub.candidate.location}
+                                </div>
+                              )}
+
+                              <div className="flex items-center gap-3 pt-3 border-t border-slate-100">
+                                {sub.candidate?.email && (
+                                  <a 
+                                    href={`mailto:${sub.candidate.email}`}
+                                    className="p-1.5 bg-slate-50 hover:bg-blue-50 text-slate-600 hover:text-blue-600 rounded transition-colors"
+                                    onClick={e => e.stopPropagation()}
+                                    title="Email candidate"
+                                  >
+                                    <Mail size={14}/>
+                                  </a>
+                                )}
+                                {sub.candidate?.phone && (
+                                  <a 
+                                    href={`tel:${sub.candidate.phone}`}
+                                    className="p-1.5 bg-slate-50 hover:bg-green-50 text-slate-600 hover:text-green-600 rounded transition-colors"
+                                    onClick={e => e.stopPropagation()}
+                                    title="Call candidate"
+                                  >
+                                    <Phone size={14}/>
+                                  </a>
+                                )}
+                                {sub.candidate?.linkedin && (
+                                  <a 
+                                    href={sub.candidate.linkedin} 
+                                    target="_blank" 
+                                    rel="noopener noreferrer"
+                                    className="p-1.5 bg-slate-50 hover:bg-blue-50 text-slate-600 hover:text-blue-600 rounded transition-colors"
+                                    onClick={e => e.stopPropagation()}
+                                    title="View LinkedIn"
+                                  >
+                                    <Linkedin size={14}/>
+                                  </a>
+                                )}
+
+                                <div className="flex-1"></div>
+
+                                <span className="text-xs text-slate-400 flex items-center gap-1">
+                                  <Clock size={11}/>
+                                  {getRelativeTime(sub.submitted_at)}
+                                </span>
+
+                                <button 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleRemoveCandidate(sub.id);
+                                  }}
+                                  className="text-slate-300 hover:text-red-500 transition-colors"
+                                  title="Remove from pipeline"
+                                >
+                                  <Trash2 size={16}/>
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -1034,6 +1230,22 @@ export default function PositionDetailSheet({ positionId, onClose, onUpdate }: P
             </div>
           )}
         </div>
+
+        {/* Footer */}
+        {position && !loading && (
+          <div className="p-5 border-t border-slate-200 bg-gradient-to-r from-slate-50 to-blue-50/20 flex items-center justify-between flex-shrink-0">
+            <div className="flex items-center gap-2 text-xs text-slate-500">
+              <Lock size={12}/>
+              <span className="font-medium">Read-only view</span>
+            </div>
+            <button 
+              onClick={onClose}
+              className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-sm font-bold transition-all shadow-sm flex items-center gap-2"
+            >
+              Close <X size={14}/>
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

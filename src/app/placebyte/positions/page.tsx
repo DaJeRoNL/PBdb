@@ -56,7 +56,7 @@ function usePositions() {
       const { data: rawPositions, error: posError } = await supabase
         .from('positions')
         .select('id, client_id, fee_fixed, fee_percentage, product_type, salary_min, salary_max, status, created_at')
-        .eq('status', 'Open');
+        .in('status', ['Open', 'On Hold']); // UPDATED: Include 'On Hold'
 
       if (posError) {
         console.error("Positions fetch failed:", posError);
@@ -118,7 +118,9 @@ function usePositions() {
         }
 
         const group = groupMap[c.id];
-        group.openRolesCount++;
+        if (pos.status === 'Open') {
+            group.openRolesCount++;
+        }
         
         let fee = 0;
         if (pos.product_type === 'fixed') {
@@ -158,7 +160,7 @@ function usePositions() {
         .from('positions')
         .select('*')
         .eq('client_id', clientId)
-        .eq('status', 'Open')
+        .in('status', ['Open', 'On Hold']) // UPDATED: Include 'On Hold'
         .order('created_at', { ascending: false });
 
       if (error) {

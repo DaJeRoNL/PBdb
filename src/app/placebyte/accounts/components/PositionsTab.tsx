@@ -132,11 +132,19 @@ export default function PositionsTab({
                             <label className="text-[10px] font-bold uppercase text-slate-400">Max Salary</label>
                             <input type="number" className="w-full p-2 border rounded mt-1 text-sm" value={editForm.salary_max} onChange={e => setEditForm({...editForm, salary_max: Number(e.target.value)})} />
                           </div>
-                          <div>
-                            <label className="text-[10px] font-bold uppercase text-slate-400">Priority</label>
-                            <select className="w-full p-2 border rounded mt-1 text-sm bg-white" value={editForm.priority} onChange={e => setEditForm({...editForm, priority: e.target.value})}>
-                              <option>Low</option><option>Medium</option><option>High</option><option>Urgent</option>
-                            </select>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                                <label className="text-[10px] font-bold uppercase text-slate-400">Priority</label>
+                                <select className="w-full p-2 border rounded mt-1 text-sm bg-white" value={editForm.priority} onChange={e => setEditForm({...editForm, priority: e.target.value})}>
+                                    <option>Low</option><option>Medium</option><option>High</option><option>Urgent</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-bold uppercase text-slate-400">Status</label>
+                                <select className="w-full p-2 border rounded mt-1 text-sm bg-white" value={editForm.status} onChange={e => setEditForm({...editForm, status: e.target.value})}>
+                                    <option>Open</option><option>On Hold</option><option>Filled</option><option>Cancelled</option>
+                                </select>
+                            </div>
                           </div>
                         </div>
                         <div className="flex justify-end gap-2 pt-2">
